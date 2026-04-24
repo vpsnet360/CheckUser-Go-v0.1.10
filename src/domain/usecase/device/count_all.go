@@ -1,7 +1,7 @@
 package device_use_case
 
 import (
-	"github.com/DTunnel0/CheckUser-Go/src/domain/contract"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/domain/contract"
 	"golang.org/x/net/context"
 )
 
