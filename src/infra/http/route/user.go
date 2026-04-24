@@ -1,8 +1,8 @@
 package route
 
 import (
-	"github.com/DTunnel0/CheckUser-Go/src/infra/adapter"
-	"github.com/DTunnel0/CheckUser-Go/src/infra/factory"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/adapter"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/factory"
 	"github.com/labstack/echo/v4"
 )
 
