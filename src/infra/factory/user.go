@@ -1,14 +1,14 @@
 package factory
 
 import (
-	"github.com/DTunnel0/CheckUser-Go/src/data"
-	"github.com/DTunnel0/CheckUser-Go/src/data/cache"
-	"github.com/DTunnel0/CheckUser-Go/src/data/connection"
-	"github.com/DTunnel0/CheckUser-Go/src/data/dao"
-	"github.com/DTunnel0/CheckUser-Go/src/data/repository"
-	user_use_case "github.com/DTunnel0/CheckUser-Go/src/domain/usecase/user"
-	"github.com/DTunnel0/CheckUser-Go/src/infra/handler"
-	user_handler "github.com/DTunnel0/CheckUser-Go/src/infra/handler/user"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data/cache"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data/connection"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data/dao"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data/repository"
+	user_use_case "github.com/vpsnet360/CheckUser-Go-v0.1.10/src/domain/usecase/user"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/handler"
+	user_handler "github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/handler/user"
 )
 
 func MakeCheckUserHandler() handler.Handler {
