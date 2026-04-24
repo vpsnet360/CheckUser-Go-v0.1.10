@@ -3,7 +3,7 @@ package adapter
 import (
 	"net/http"
 
-	"github.com/DTunnel0/CheckUser-Go/src/infra/handler"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/handler"
 	"github.com/labstack/echo/v4"
 )
 
