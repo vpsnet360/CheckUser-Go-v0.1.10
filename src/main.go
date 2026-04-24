@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/DTunnel0/CheckUser-Go/src/data/repository"
-	"github.com/DTunnel0/CheckUser-Go/src/infra/factory"
-	"github.com/DTunnel0/CheckUser-Go/src/infra/http"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data/repository"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/factory"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/http"
 )
 
 var (
