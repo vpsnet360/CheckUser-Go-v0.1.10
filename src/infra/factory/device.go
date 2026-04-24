@@ -1,11 +1,11 @@
 package factory
 
 import (
-	"github.com/DTunnel0/CheckUser-Go/src/data/repository"
-	device_use_case "github.com/DTunnel0/CheckUser-Go/src/domain/usecase/device"
-	"github.com/DTunnel0/CheckUser-Go/src/infra/handler"
-	device_handler "github.com/DTunnel0/CheckUser-Go/src/infra/handler/device"
-	"github.com/DTunnel0/CheckUser-Go/src/infra/presenter"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/data/repository"
+	device_use_case "github.com/vpsnet360/CheckUser-Go-v0.1.10/src/domain/usecase/device"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/handler"
+	device_handler "github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/handler/device"
+	"github.com/vpsnet360/CheckUser-Go-v0.1.10/src/infra/presenter"
 )
 
 func MakeListDevicesPresenter() *presenter.ListDevicesPresenter {
