@@ -1,4 +1,4 @@
-module github.com/DTunnel0/CheckUser-Go
+module github.com/vpsnet360/CheckUser-Go-v0.1.10
 
 go 1.21.6
 
