@@ -86,7 +86,7 @@ install_checkuser() {
 
     local name="checkuser-linux-$arch"
     echo "Baixando $name..."
-    wget -q "https://github.com/DTunnel0/CheckUser-Go/releases/download/$latest_release/$name" -O /usr/local/bin/checkuser
+    wget -q "https://github.com/vpsnet360/CheckUser-Go-v0.1.10/releases/download/$latest_release/$name" -O /usr/local/bin/checkuser
     chmod +x /usr/local/bin/checkuser
 
     local addr=$(curl -s https://ipv4.icanhazip.com)
