@@ -76,7 +76,7 @@ systemctl start checkuser' | sudo tee /etc/letsencrypt/renewal-hooks/post/checku
 }
 
 install_checkuser() {
-    local latest_release=$(curl -s https://api.github.com/repos/DTunnel0/CheckUser-Go/releases/latest | grep "tag_name" | cut -d'"' -f4)
+    local latest_release=$(curl -s https://api.github.com/repos/vpsnet360/CheckUser-Go-v0.1.10/releases/latest | grep "tag_name" | cut -d'"' -f4)
     local arch=$(get_arch)
 
     if [ "$arch" = "unsupported" ]; then
