@@ -8,130 +8,105 @@ get_arch() {
     esac
 }
 
-install_certificate() {
+generate_self_signed_cert() {
     local domain=$1
+    local cert_dir="/etc/checkuser/ssl"
     
-    echo -e "\e[1;33mInstalando certificado SSL para $domain...\e[0m"
+    echo -e "\n🔐 Generando certificado SSL autofirmado para $domain..."
     
-    # Verificar si certbot está instalado
-    if ! command -v certbot &> /dev/null; then
-        echo -e "\e[1;33mInstalando certbot...\e[0m"
-        if command -v apt &> /dev/null; then
-            sudo apt update -y &>/dev/null
-            sudo apt install certbot -y &>/dev/null
-        elif command -v yum &> /dev/null; then
-            sudo yum install certbot -y &>/dev/null
-        else
-            echo -e "\e[1;31mNo se pudo instalar certbot. Sistema no soportado.\e[0m"
-            return 1
-        fi
-    fi
+    mkdir -p "$cert_dir"
     
-    # Detener temporalmente el servicio checkuser para liberar el puerto 80
-    echo -e "\e[1;33mDeteniendo checkuser temporalmente para validación...\e[0m"
-    sudo systemctl stop checkuser &>/dev/null
+    openssl req -x509 -newkey rsa:4096 -keyout "$cert_dir/private.key" -out "$cert_dir/certificate.crt" -days 365 -nodes -subj "/CN=$domain"
     
-    # Obtener certificado standalone (usa puerto 80 para validación)
-    echo -e "\e[1;33mObteniendo certificado SSL...\e[0m"
-    if sudo certbot certonly --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$domain"; then
-        echo -e "\e[1;32m✅ Certificado SSL obtenido exitosamente!\e[0m"
-        
-        # La ruta donde se guardan los certificados
-        local cert_path="/etc/letsencrypt/live/$domain"
-        echo -e "\e[1;32mCertificado guardado en: $cert_path\e[0m"
-        echo -e "\e[1;32m  - Certificado: $cert_path/fullchain.pem\e[0m"
-        echo -e "\e[1;32m  - Clave privada: $cert_path/privkey.pem\e[0m"
-        
-        # Configurar renovación automática
-        echo -e "\e[1;33mConfigurando renovación automática...\e[0m"
-        # Agregar hook para detener checkuser antes de renovar
-        sudo mkdir -p /etc/letsencrypt/renewal-hooks/pre
-        sudo mkdir -p /etc/letsencrypt/renewal-hooks/post
-        
-        echo '#!/bin/bash
-systemctl stop checkuser' | sudo tee /etc/letsencrypt/renewal-hooks/pre/checkuser-stop.sh > /dev/null
-        sudo chmod +x /etc/letsencrypt/renewal-hooks/pre/checkuser-stop.sh
-        
-        echo '#!/bin/bash
-systemctl start checkuser' | sudo tee /etc/letsencrypt/renewal-hooks/post/checkuser-start.sh > /dev/null
-        sudo chmod +x /etc/letsencrypt/renewal-hooks/post/checkuser-start.sh
-        
-        # Probar renovación automática
-        echo -e "\e[1;33mProbando renovación automática...\e[0m"
-        sudo certbot renew --dry-run &>/dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "\e[1;32m✅ Renovación automática configurada correctamente.\e[0m"
-        else
-            echo -e "\e[1;31m⚠️  Hubo un problema con la renovación automática.\e[0m"
-        fi
-        
+    if [[ -f "$cert_dir/private.key" && -f "$cert_dir/certificate.crt" ]]; then
+        echo -e "\e[1;32m✅ Certificado SSL generado exitosamente!\e[0m"
         return 0
     else
-        echo -e "\e[1;31m❌ Error al obtener el certificado SSL.\e[0m"
-        echo -e "\e[1;33mVerifica que:\e[0m"
-        echo -e "\e[1;33m  1. El dominio $domain apunte a este servidor\e[0m"
-        echo -e "\e[1;33m  2. El puerto 80 esté abierto en el firewall\e[0m"
+        echo -e "\e[1;31m❌ Fallo al generar certificado SSL!\e[0m"
         return 1
     fi
 }
 
 install_checkuser() {
-    local latest_release=$(curl -s https://api.github.com/repos/vpsnet360/CheckUser-Go-v0.1.10/releases/latest | grep "tag_name" | cut -d'"' -f4)
-    local arch=$(get_arch)
+    echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v1.1.10\e[0m"
+    echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2052)\e[0m"
+    echo -e "\e[1;32m[2] - SSL con certificado autofirmado (HTTPS - Puerto 2053)\e[0m"
+    echo -ne "\e[1;33mElige una opción: \e[0m"
+    read ssl_option
 
+    local port=""
+    local ssl_params=""
+    local addr=$(curl -s https://ipv4.icanhazip.com)
+    
+    # OBTENER LA VERSIÓN CORRECTA
+    local repo="vpsnet360/CheckUser-Go-v0.1.10"
+    local latest_release=$(curl -s https://api.github.com/repos/$repo/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    
+    if [[ -z "$latest_release" ]]; then
+        echo -e "\e[1;31m❌ No se pudo obtener la última versión. Usando versión por defecto\e[0m"
+        latest_release="v1.1.10"
+    fi
+    
+    local arch=$(get_arch)
     if [ "$arch" = "unsupported" ]; then
-        echo -e "\e[1;31mArquitetura de CPU não suportada!\e[0m"
+        echo -e "\e[1;31mArquitectura de CPU no soportada!\e[0m"
         exit 1
     fi
 
+    echo -e "\e[1;33m📥 Descargando CheckUser versión: $latest_release para $arch...\e[0m"
     local name="checkuser-linux-$arch"
-    echo "Baixando $name..."
-    wget -q "https://github.com/vpsnet360/CheckUser-Go-v0.1.10/releases/download/$latest_release/$name" -O /usr/local/bin/checkuser
+    local download_url="https://github.com/$repo/releases/download/$latest_release/$name"
+    
+    wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
+    
+    if [[ $? -ne 0 ]]; then
+        echo -e "\e[1;31m❌ Error al descargar. Intentando URL alternativa...\e[0m"
+        download_url="https://github.com/$repo/releases/download/v1.1.10/$name"
+        wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
+    fi
+    
     chmod +x /usr/local/bin/checkuser
 
-    local addr=$(curl -s https://ipv4.icanhazip.com)
-    
-    # Solicitar dominio
-    echo -ne "\e[1;33mDigite seu domínio (ej: checkuser.midominio.com) o deixe em branco para usar IP direto: \e[0m"
-    read user_domain
-    
-    if [[ -z $user_domain ]]; then
-        local url=""
-        local port="2052"
-        local sslEnabled=""
-    else
-        # Instalar certificado SSL
-        if install_certificate "$user_domain"; then
-            local url="$user_domain"
-            local port="2053"
-            # Usar los certificados obtenidos
-            local cert_path="/etc/letsencrypt/live/$user_domain"
-            local sslEnabled="--ssl --cert-file $cert_path/fullchain.pem --key-file $cert_path/privkey.pem"
-        else
-            echo -e "\e[1;33mContinuando sin SSL...\e[0m"
-            local url=""
-            local port="2052"
-            local sslEnabled=""
-        fi
-    fi
+    case $ssl_option in
+        1)
+            port="2052"
+            ssl_params=""
+            final_url="http://$addr:$port"
+            echo -e "\e[1;33m⚠️  Instalando sin SSL\e[0m"
+            ;;
+        2)
+            port="2053"
+            echo -ne "\e[1;33mIngresa tu dominio o IP para el certificado: \e[0m"
+            read custom_domain
+            [[ -z "$custom_domain" ]] && custom_domain="$addr"
+            
+            if generate_self_signed_cert "$custom_domain"; then
+                ssl_params="--ssl --cert /etc/checkuser/ssl/certificate.crt --key /etc/checkuser/ssl/private.key"
+                final_url="https://$custom_domain:$port"
+                echo -e "\e[1;32m✅ SSL configurado correctamente\e[0m"
+            else
+                echo -e "\e[1;31m❌ Error SSL, instalando sin SSL...\e[0m"
+                port="2052"
+                ssl_params=""
+                final_url="http://$addr:2052"
+            fi
+            ;;
+        *)
+            echo -e "\e[1;31mOpción inválida\e[0m"
+            return 1
+            ;;
+    esac
 
-    if systemctl status checkuser &>/dev/null 2>&1; then
-        echo "Parando o serviço checkuser existente..."
-        sudo systemctl stop checkuser
-        sudo systemctl disable checkuser
-        sudo rm /etc/systemd/system/checkuser.service
-        sudo systemctl daemon-reload
-        echo "Serviço checkuser existente foi parado e removido."
-    fi
+    # Detener servicio existente
+    sudo systemctl stop checkuser &>/dev/null
+    sudo systemctl disable checkuser &>/dev/null
+    sudo rm -f /etc/systemd/system/checkuser.service
+    sudo systemctl daemon-reload
 
-    # Si hay certificado, re-iniciar checkuser que fue detenido para la validación
-    if [[ ! -z $sslEnabled ]]; then
-        echo -e "\e[1;33mReiniciando checkuser con SSL...\e[0m"
-    fi
-
+    # Crear servicio systemd
     cat << EOF | sudo tee /etc/systemd/system/checkuser.service > /dev/null
 [Unit]
-Description=CheckUser Service
+Description=CheckUser Service v1.1.10
 After=network.target nss-lookup.target
 
 [Service]
@@ -139,98 +114,91 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/checkuser --start --port $port $sslEnabled
+ExecStart=/usr/local/bin/checkuser --start --port $port $ssl_params
 Restart=always
+RestartSec=5
+WorkingDirectory=/etc/checkuser
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    sudo systemctl daemon-reload &>/dev/null
-    sudo systemctl start checkuser &>/dev/null
-    sudo systemctl enable checkuser &>/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl start checkuser
+    sudo systemctl enable checkuser
 
-    # Verificar conexión
     sleep 2
-    if [[ -z $url ]]; then
-        echo -e "\e[1;32m====================================\e[0m"
-        echo -e "\e[1;32mURL: \e[1;33mhttp://$addr:$port\e[0m"
+
+    # Verificar
+    if systemctl is-active --quiet checkuser; then
+        echo -e "\n\e[1;32m====================================\e[0m"
+        echo -e "\e[1;32m✅ CheckUser v1.1.10 INSTALADO!\e[0m"
+        echo -e "\e[1;32m🌐 URL: \e[1;33m$final_url\e[0m"
         echo -e "\e[1;32m====================================\e[0m"
         
-        echo -e "\e[1;33mProbando servicio...\e[0m"
-        if curl -s http://$addr:$port > /dev/null 2>&1; then
+        # Probar conexión
+        if curl -s --max-time 3 --insecure "$final_url" &>/dev/null; then
             echo -e "\e[1;32m✅ Servicio funcionando correctamente!\e[0m"
         else
-            echo -e "\e[1;31m⚠️  No se pudo verificar. Verifica: sudo journalctl -u checkuser\e[0m"
+            echo -e "\e[1;33m⚠️  Verifica el firewall: sudo ufw allow $port/tcp\e[0m"
         fi
-    else 
-        echo -e "\e[1;32m====================================\e[0m"
-        echo -e "\e[1;32mURL: \e[1;33mhttps://$url:$port\e[0m"
-        echo -e "\e[1;32m====================================\e[0m"
-        
-        echo -e "\e[1;33mVerificando SSL...\e[0m"
-        if curl -sk https://$url:$port > /dev/null 2>&1; then
-            echo -e "\e[1;32m✅ Servicio HTTPS funcionando con certificado SSL válido!\e[0m"
-            echo -e "\e[1;33mPara verificar el certificado:\e[0m"
-            echo -e "\e[1;33m  curl -vI https://$url:$port\e[0m"
-        else
-            echo -e "\e[1;31m⚠️  No se pudo verificar HTTPS. Revisa:\e[0m"
-            echo -e "\e[1;33m  sudo journalctl -u checkuser\e[0m"
-        fi
+    else
+        echo -e "\e[1;31m❌ Error al iniciar el servicio\e[0m"
+        echo -e "\e[1;33mLogs: sudo journalctl -u checkuser -n 20\e[0m"
     fi
-
-    echo -e "\e[1;32mO serviço CheckUser foi instalado e iniciado.\e[0m"
+    
+    echo -e "\nPresiona Enter para continuar..."
     read
 }
 
 reinstall_checkuser() {
-    echo "Parando e removendo o serviço checkuser..."
+    echo "Reinstalando CheckUser..."
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
-    sudo rm /usr/local/bin/checkuser
-    sudo rm /etc/systemd/system/checkuser.service
-    sudo systemctl daemon-reload &>/dev/null
-    echo "Serviço checkuser removido."
-
+    sudo rm -f /usr/local/bin/checkuser
+    sudo rm -f /etc/systemd/system/checkuser.service
+    sudo rm -rf /etc/checkuser
+    sudo systemctl daemon-reload
     install_checkuser
 }
 
 uninstall_checkuser() {
+    echo "Desinstalando CheckUser..."
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
-    sudo rm /usr/local/bin/checkuser
-    sudo rm /etc/systemd/system/checkuser.service
-    sudo systemctl daemon-reload &>/dev/null
-    echo "Serviço checkuser removido."
+    sudo rm -f /usr/local/bin/checkuser
+    sudo rm -f /etc/systemd/system/checkuser.service
+    sudo rm -rf /etc/checkuser
+    sudo systemctl daemon-reload
+    echo -e "\e[1;32m✅ CheckUser desinstalado\e[0m"
+    echo -e "\nPresiona Enter para continuar..."
     read
 }
 
 main() {
     clear
-
     echo '---------------------------------'
-    echo -ne '     \e[1;33mCHECKUSER\e[0m'
-    if [[ -e /usr/local/bin/checkuser ]]; then
-        echo -e ' \e[1;32mv'$(/usr/local/bin/checkuser --version | cut -d' ' -f2)'\e[0m'
+    echo -ne '     \e[1;33mCHECKUSER v1.1.10\e[0m'
+    if [[ -x /usr/local/bin/checkuser ]]; then
+        echo -e ' \e[1;32m[INSTALADO]\e[0m'
     else
-        echo -e ' \e[1;31m[DESINSTALADO]\e[0m'
+        echo -e ' \e[1;31m[NO INSTALADO]\e[0m'
     fi
     echo '---------------------------------'
-
-    echo -e '\e[1;32m[01] - \e[1;31mINSTALAR CHECKUSER\e[0m'
-    echo -e '\e[1;32m[02] - \e[1;31mREINSTALAR CHECKUSER\e[0m'
-    echo -e '\e[1;32m[03] - \e[1;31mDESINSTALAR CHECKUSER\e[0m'
-    echo -e '\e[1;32m[00] - \e[1;31mSAIR\e[0m'
+    echo -e '\e[1;32m[01] - INSTALAR CHECKUSER\e[0m'
+    echo -e '\e[1;32m[02] - REINSTALAR CHECKUSER\e[0m'
+    echo -e '\e[1;32m[03] - DESINSTALAR CHECKUSER\e[0m'
+    echo -e '\e[1;32m[00] - SALIR\e[0m'
     echo '---------------------------------'
-    echo -ne '\e[1;32mEscolha uma opção: \e[0m'; 
+    echo -ne '\e[1;32mElige una opción: \e[0m'
     read option
 
     case $option in
         1) install_checkuser; main ;;
         2) reinstall_checkuser; main ;;
         3) uninstall_checkuser; main ;;
-        0) echo "Saindo.";;
-        *) echo -e "\e[1;31mOpção inválida. Tente novamente.\e[0m";read; main ;;
+        0) echo "Saliendo..." ; exit 0 ;;
+        *) echo -e "\e[1;31mOpción inválida\e[0m"; sleep 2; main ;;
     esac
 }
 
