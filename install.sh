@@ -1,4 +1,19 @@
 #!/bin/bash
+# ============================================================
+#   CHECKUSER SSL INSTALLER - Nginx + Let's Encrypt
+#   Script completo con instalación automática
+# ============================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+OK="${GREEN}[✓]${NC}"
+ERR="${RED}[✗]${NC}"
+INFO="${CYAN}[i]${NC}"
+WARN="${YELLOW}[!]${NC}"
 
 get_arch() {
     case "$(uname -m)" in
@@ -8,222 +23,70 @@ get_arch() {
     esac
 }
 
-install_certbot() {
-    echo -e "\n\e[1;33m📦 Instalando Certbot...\e[0m"
+install_dependencies() {
+    echo -e "${INFO} Instalando dependencias (nginx, certbot, curl)..."
     
     if command -v apt &>/dev/null; then
         sudo apt update -y &>/dev/null
-        sudo apt install -y certbot &>/dev/null
+        sudo apt install -y nginx certbot python3-certbot-nginx curl wget &>/dev/null
     elif command -v yum &>/dev/null; then
-        sudo yum install -y certbot &>/dev/null
+        sudo yum install -y epel-release &>/dev/null
+        sudo yum install -y nginx certbot python3-certbot-nginx curl wget &>/dev/null
     elif command -v dnf &>/dev/null; then
-        sudo dnf install -y certbot &>/dev/null
+        sudo dnf install -y nginx certbot python3-certbot-nginx curl wget &>/dev/null
     else
-        echo -e "\e[1;31m❌ No se pudo instalar certbot. Instala manualmente\e[0m"
+        echo -e "${ERR} No se pudo instalar dependencias"
         return 1
     fi
     
-    echo -e "\e[1;32m✅ Certbot instalado\e[0m"
+    echo -e "${OK} Dependencias instaladas"
     return 0
 }
 
-generate_letsencrypt_cert() {
-    local domain=$1
-    local email=$2
-    local cert_dir="/etc/checkuser/ssl"
-    
-    echo -e "\n🔐 Generando certificado SSL con Let's Encrypt para $domain..."
-    echo -e "\e[1;33m⚠️  REQUISITOS IMPORTANTES:\e[0m"
-    echo -e "\e[1;33m  1. El dominio $domain debe apuntar a este servidor (registro A)\e[0m"
-    echo -e "\e[1;33m  2. El puerto 80 debe estar libre (detén nginx/apache si es necesario)\e[0m"
-    echo -e "\e[1;33m  3. El servidor debe ser accesible desde Internet\e[0m"
-    echo -ne "\e[1;33m¿Continuar? [s/N]: \e[0m"
-    read confirm
-    [[ "$confirm" != "s" && "$confirm" != "S" ]] && return 1
-    
-    # Instalar certbot si no existe
-    if ! command -v certbot &>/dev/null; then
-        install_certbot || return 1
-    fi
-    
-    mkdir -p "$cert_dir"
-    
-    # Detener servicios que puedan ocupar el puerto 80 temporalmente
-    echo -e "\e[1;33m🔄 Deteniendo servicios web temporalmente...\e[0m"
-    sudo systemctl stop nginx &>/dev/null
-    sudo systemctl stop apache2 &>/dev/null
-    sudo systemctl stop httpd &>/dev/null
-    
-    # Generar certificado con certbot standalone
-    echo -e "\e[1;33m🔐 Generando certificado (puede tomar unos segundos)...\e[0m"
-    sudo certbot certonly --standalone \
-        --non-interactive \
-        --agree-tos \
-        --email "$email" \
-        -d "$domain" 2>/tmp/certbot_error.log
-    
-    if [[ $? -eq 0 ]]; then
-        # Copiar certificados al directorio de checkuser
-        sudo cp /etc/letsencrypt/live/$domain/fullchain.pem "$cert_dir/certificate.crt"
-        sudo cp /etc/letsencrypt/live/$domain/privkey.pem "$cert_dir/private.key"
-        sudo chmod 644 "$cert_dir/certificate.crt"
-        sudo chmod 600 "$cert_dir/private.key"
-        
-        echo -e "\e[1;32m✅ Certificado SSL de Let's Encrypt generado exitosamente!\e[0m"
-        echo -e "   📁 Certificado: $cert_dir/certificate.crt"
-        echo -e "   🔑 Clave privada: $cert_dir/private.key"
-        echo -e "   ⏰ Válido por 90 días"
-        
-        # Configurar renovación automática
-        echo -e "\e[1;33m🔄 Configurando renovación automática...\e[0m"
-        
-        # Crear script de renovación
-        cat << 'EOF' | sudo tee /etc/checkuser/renew-cert.sh > /dev/null
-#!/bin/bash
-certbot renew --quiet
-cp /etc/letsencrypt/live/$1/fullchain.pem /etc/checkuser/ssl/certificate.crt
-cp /etc/letsencrypt/live/$1/privkey.pem /etc/checkuser/ssl/private.key
-chmod 644 /etc/checkuser/ssl/certificate.crt
-chmod 600 /etc/checkuser/ssl/private.key
-systemctl restart checkuser
-EOF
-        
-        sudo sed -i "s/\$1/$domain/g" /etc/checkuser/renew-cert.sh
-        sudo chmod +x /etc/checkuser/renew-cert.sh
-        
-        # Agregar al crontab para renovación automática
-        (sudo crontab -l 2>/dev/null; echo "0 0 1 * * /etc/checkuser/renew-cert.sh") | sudo crontab - 2>/dev/null
-        
-        echo -e "\e[1;32m✅ Renovación automática configurada (cada mes)\e[0m"
-        
+install_checkuser_binary() {
+    if [[ -x /usr/local/bin/checkuser ]]; then
+        echo -e "${OK} CheckUser ya instalado"
         return 0
-    else
-        echo -e "\e[1;31m❌ Error al generar certificado Let's Encrypt\e[0m"
-        echo -e "\e[1;33mError: $(cat /tmp/certbot_error.log)\e[0m"
-        return 1
-    fi
-}
-
-install_checkuser() {
-    echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
-    echo -e "\e[1;33m════════════════════════════════════\e[0m"
-    echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2053)\e[0m"
-    echo -e "\e[1;32m[2] - Con SSL Let's Encrypt (HTTPS - Puerto 2053) 🔒\e[0m"
-    echo -e "\e[1;33m════════════════════════════════════\e[0m"
-    echo -ne "\e[1;33mElige una opción [1-2]: \e[0m"
-    read ssl_option
-
-    local port="2053"
-    local ssl_params=""
-
-    # Obtener IP pública
-    local addr
-    addr=$(curl -s --max-time 5 https://ipv4.icanhazip.com)
-    if [[ -z "$addr" ]]; then
-        echo -e "\e[1;31m❌ No se pudo obtener la IP pública. Verifica tu conexión.\e[0m"
-        return 1
     fi
 
-    # Obtener versión
+    echo -e "${INFO} Descargando CheckUser..."
+
     local repo="vpsnet360/CheckUser-Go-v0.1.10"
     local latest_release
     latest_release=$(curl -s https://api.github.com/repos/$repo/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-
-    if [[ -z "$latest_release" ]]; then
-        echo -e "\e[1;31m❌ No se pudo obtener la última versión. Usando versión por defecto\e[0m"
-        latest_release="v0.1.10"
-    fi
+    [[ -z "$latest_release" ]] && latest_release="v0.1.10"
 
     local arch
     arch=$(get_arch)
     if [ "$arch" = "unsupported" ]; then
-        echo -e "\e[1;31mArquitectura de CPU no soportada!\e[0m"
-        exit 1
+        echo -e "${ERR} Arquitectura no soportada"
+        return 1
     fi
 
-    echo -e "\e[1;33m📥 Descargando CheckUser versión: $latest_release para $arch...\e[0m"
     local name="checkuser-linux-$arch"
     local download_url="https://github.com/$repo/releases/download/$latest_release/$name"
 
     wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
 
     if [[ $? -ne 0 ]]; then
-        echo -e "\e[1;31m❌ Error al descargar. Intentando URL alternativa...\e[0m"
         download_url="https://github.com/$repo/releases/download/v0.1.10/$name"
         wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
         if [[ $? -ne 0 ]]; then
-            echo -e "\e[1;31m❌ No se pudo descargar el binario. Abortando.\e[0m"
+            echo -e "${ERR} No se pudo descargar CheckUser"
             return 1
         fi
     fi
 
     chmod +x /usr/local/bin/checkuser
+    echo -e "${OK} CheckUser instalado"
+    return 0
+}
 
-    # CREAR DIRECTORIO DE TRABAJO
+configure_checkuser_service() {
+    echo -e "${INFO} Configurando servicio CheckUser (HTTP:2054)..."
+    
     mkdir -p /etc/checkuser
-    echo -e "\e[1;32m✅ Directorio /etc/checkuser creado\e[0m"
 
-    case $ssl_option in
-        1)
-            ssl_params=""
-            final_url="http://$addr:$port"
-            echo -e "\e[1;33m⚠️  Modo HTTP sin SSL - No recomendado para producción\e[0m"
-            ;;
-        2)
-            echo -ne "\e[1;33m🌐 Ingresa tu dominio (ej: check.midominio.com): \e[0m"
-            read custom_domain
-            
-            if [[ -z "$custom_domain" ]]; then
-                echo -e "\e[1;31m❌ Debes ingresar un dominio para SSL\e[0m"
-                echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
-                ssl_params=""
-                final_url="http://$addr:$port"
-            else
-                echo -ne "\e[1;33m📧 Ingresa tu email para Let's Encrypt: \e[0m"
-                read email
-                [[ -z "$email" ]] && email="admin@$custom_domain"
-                
-                if generate_letsencrypt_cert "$custom_domain" "$email"; then
-                    ssl_params="-ssl"
-                    final_url="https://$custom_domain:$port"
-                    echo -e "\e[1;32m✅ SSL Let's Encrypt configurado - Certificado VÁLIDO!\e[0m"
-                else
-                    echo -e "\e[1;31m❌ No se pudo generar el certificado SSL\e[0m"
-                    echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
-                    ssl_params=""
-                    final_url="http://$addr:$port"
-                fi
-            fi
-            ;;
-        *)
-            echo -e "\e[1;31m❌ Opción inválida\e[0m"
-            return 1
-            ;;
-    esac
-
-    # ABRIR PUERTOS EN EL FIREWALL
-    if command -v ufw &>/dev/null; then
-        echo -e "\e[1;33m🔓 Configurando firewall...\e[0m"
-        sudo ufw allow $port/tcp &>/dev/null
-        [[ -n "$ssl_params" ]] && sudo ufw allow 80/tcp &>/dev/null
-        sudo ufw reload &>/dev/null
-        echo -e "\e[1;32m✅ Puerto $port/tcp abierto en UFW\e[0m"
-        [[ -n "$ssl_params" ]] && echo -e "\e[1;32m✅ Puerto 80/tcp abierto en UFW (para renovación)\e[0m"
-    elif command -v firewall-cmd &>/dev/null; then
-        echo -e "\e[1;33m🔓 Configurando firewall...\e[0m"
-        sudo firewall-cmd --permanent --add-port=$port/tcp &>/dev/null
-        [[ -n "$ssl_params" ]] && sudo firewall-cmd --permanent --add-port=80/tcp &>/dev/null
-        sudo firewall-cmd --reload &>/dev/null
-        echo -e "\e[1;32m✅ Puerto $port/tcp abierto en firewalld\e[0m"
-    fi
-
-    # Detener servicio existente
-    sudo systemctl stop checkuser &>/dev/null
-    sudo systemctl disable checkuser &>/dev/null
-    sudo rm -f /etc/systemd/system/checkuser.service
-    sudo systemctl daemon-reload
-
-    # Crear servicio systemd
     cat << EOF | sudo tee /etc/systemd/system/checkuser.service > /dev/null
 [Unit]
 Description=CheckUser Service v0.1.10
@@ -234,7 +97,7 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/checkuser -start -port $port $ssl_params
+ExecStart=/usr/local/bin/checkuser -start -port 2054
 Restart=always
 RestartSec=5
 WorkingDirectory=/etc/checkuser
@@ -244,60 +107,317 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload
-    sudo systemctl start checkuser
-    sudo systemctl enable checkuser
-
+    sudo systemctl enable checkuser &>/dev/null
+    sudo systemctl restart checkuser
     sleep 2
 
-    # Verificar
     if systemctl is-active --quiet checkuser; then
-        echo -e "\n\e[1;32m════════════════════════════════════\e[0m"
-        echo -e "\e[1;32m✅ CheckUser v0.1.10 INSTALADO!\e[0m"
-        echo -e "\e[1;32m🌐 URL: \e[1;33m$final_url\e[0m"
-        echo -e "\e[1;32m🔓 Puerto: \e[1;33m$port/tcp\e[0m"
-        [[ -n "$ssl_params" ]] && echo -e "\e[1;32m🔒 SSL: \e[1;33mLet's Encrypt (Válido)\e[0m" || echo -e "\e[1;31m⚠️  SSL: \e[1;33mDesactivado\e[0m"
-        echo -e "\e[1;32m════════════════════════════════════\e[0m"
-
-        # Probar conexión
-        if curl -s --max-time 3 "$final_url" &>/dev/null; then
-            echo -e "\e[1;32m✅ Servicio funcionando correctamente!\e[0m"
-        else
-            echo -e "\e[1;33m⚠️  Verifica la conectividad al puerto $port\e[0m"
-        fi
+        echo -e "${OK} CheckUser corriendo en puerto 2054 (interno)"
+        return 0
     else
-        echo -e "\e[1;31m❌ Error al iniciar el servicio\e[0m"
-        echo -e "\e[1;33mLogs: sudo journalctl -u checkuser -n 20\e[0m"
-        sudo journalctl -u checkuser --no-pager -n 5
+        echo -e "${ERR} Error al iniciar CheckUser"
+        sudo journalctl -u checkuser -n 10 --no-pager
+        return 1
+    fi
+}
+
+configure_nginx_ssl() {
+    local domain=$1
+    
+    echo -e "${INFO} Configurando nginx SSL proxy en puerto 2053..."
+    
+    # Eliminar configuración default
+    sudo rm -f /etc/nginx/sites-enabled/default
+    sudo rm -f /etc/nginx/conf.d/default.conf
+
+    # Crear configuración nginx
+    cat << EOF | sudo tee /etc/nginx/sites-enabled/checkuser.conf > /dev/null
+server {
+    listen 2053 ssl;
+    server_name ${domain};
+
+    ssl_certificate /etc/letsencrypt/live/${domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${domain}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    
+    # Seguridad adicional
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+
+    location / {
+        proxy_pass http://127.0.0.1:2054;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+
+    # Verificar configuración
+    sudo nginx -t &>/dev/null
+    if [[ $? -ne 0 ]]; then
+        echo -e "${ERR} Error en configuración de nginx"
+        sudo nginx -t
+        return 1
     fi
 
-    echo -e "\nPresiona Enter para continuar..."
+    sudo systemctl enable nginx &>/dev/null
+    sudo systemctl restart nginx
+    sleep 1
+
+    if systemctl is-active --quiet nginx; then
+        echo -e "${OK} Nginx corriendo con SSL en puerto 2053"
+        return 0
+    else
+        echo -e "${ERR} Error al iniciar nginx"
+        sudo journalctl -u nginx -n 10 --no-pager
+        return 1
+    fi
+}
+
+generate_ssl_certificate() {
+    local domain=$1
+    local email=$2
+    
+    echo -e "${INFO} Generando certificado SSL para ${domain}..."
+    
+    # Verificar si ya existe
+    if [[ -d "/etc/letsencrypt/live/${domain}" ]]; then
+        echo -e "${WARN} Certificado existente para ${domain}, usando actual"
+        return 0
+    fi
+    
+    # Liberar puerto 80
+    echo -e "${INFO} Liberando puerto 80..."
+    sudo systemctl stop nginx &>/dev/null
+    sudo systemctl stop apache2 &>/dev/null
+    sudo systemctl stop httpd &>/dev/null
+    
+    # Matar cualquier proceso en puerto 80
+    local pid_80
+    pid_80=$(sudo ss -tlnp | grep ':80' | grep -oP 'pid=\K[0-9]+' | head -1)
+    if [[ -n "$pid_80" ]]; then
+        echo -e "${INFO} Cerrando proceso en puerto 80 (PID: $pid_80)..."
+        sudo kill "$pid_80" 2>/dev/null
+        sleep 2
+    fi
+    
+    # Generar certificado
+    sudo certbot certonly --standalone \
+        -d "$domain" \
+        --email "$email" \
+        --agree-tos \
+        --non-interactive \
+        --quiet 2>/tmp/certbot_error.log
+    
+    if [[ $? -ne 0 ]]; then
+        echo -e "${ERR} Error al generar certificado SSL"
+        echo -e "${WARN} $(cat /tmp/certbot_error.log)"
+        return 1
+    fi
+    
+    echo -e "${OK} Certificado SSL generado exitosamente"
+    return 0
+}
+
+configure_firewall() {
+    echo -e "${INFO} Configurando firewall..."
+    
+    if command -v ufw &>/dev/null; then
+        sudo ufw allow 2053/tcp &>/dev/null
+        sudo ufw allow 80/tcp &>/dev/null
+        sudo ufw reload &>/dev/null
+        echo -e "${OK} Puertos 2053 y 80 abiertos en UFW"
+    elif command -v firewall-cmd &>/dev/null; then
+        sudo firewall-cmd --permanent --add-port=2053/tcp &>/dev/null
+        sudo firewall-cmd --permanent --add-port=80/tcp &>/dev/null
+        sudo firewall-cmd --reload &>/dev/null
+        echo -e "${OK} Puertos 2053 y 80 abiertos en firewalld"
+    else
+        echo -e "${WARN} No se detectó firewall. Abre puertos 2053 y 80 manualmente"
+    fi
+}
+
+setup_auto_renewal() {
+    local domain=$1
+    
+    echo -e "${INFO} Configurando renovación automática SSL..."
+    
+    # Crear script de renovación
+    cat << EOF | sudo tee /etc/checkuser/renew-ssl.sh > /dev/null
+#!/bin/bash
+# Script de renovación automática SSL para CheckUser
+
+# Liberar puerto 80
+systemctl stop nginx 2>/dev/null
+systemctl stop apache2 2>/dev/null
+
+# Renovar certificado
+certbot renew --quiet
+
+# Copiar certificados actualizados
+cp /etc/letsencrypt/live/${domain}/fullchain.pem /etc/checkuser/ssl/fullchain.pem
+cp /etc/letsencrypt/live/${domain}/privkey.pem /etc/checkuser/ssl/privkey.pem
+
+# Reiniciar servicios
+systemctl start nginx
+systemctl restart checkuser
+EOF
+    
+    sudo chmod +x /etc/checkuser/renew-ssl.sh
+    
+    # Agregar al crontab
+    (sudo crontab -l 2>/dev/null; echo "0 3 * * 1 /etc/checkuser/renew-ssl.sh") | sudo crontab - 2>/dev/null
+    
+    echo -e "${OK} Renovación automática configurada (cada lunes a las 3 AM)"
+}
+
+install_checkuser() {
+    clear
+    echo -e "${CYAN}"
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║     CHECKUSER SSL INSTALLER v1.0         ║"
+    echo "  ║     Proxy nginx + Let's Encrypt          ║"
+    echo "  ╚══════════════════════════════════════════╝"
+    echo -e "${NC}"
+
+    # Pedir dominio
+    echo -e "${INFO} Ingresá el subdominio para checkuser:"
+    echo -e "    (Ej: check.midominio.com)"
+    read -rp "    Subdominio: " DOMAIN
+
+    if [[ -z "$DOMAIN" ]]; then
+        echo -e "${ERR} Dominio vacío. Volviendo al menú..."
+        sleep 2
+        return 1
+    fi
+
+    # Pedir email
+    echo -e "${INFO} Ingresá tu email para Let's Encrypt:"
+    read -rp "    Email: " EMAIL
+
+    if [[ -z "$EMAIL" ]]; then
+        echo -e "${ERR} Email vacío. Volviendo al menú..."
+        sleep 2
+        return 1
+    fi
+
+    # Verificar DNS
+    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s https://ipv4.icanhazip.com)
+    DOMAIN_IP=$(dig +short "$DOMAIN" 2>/dev/null | tail -1)
+
+    echo ""
+    echo -e "${INFO} IP del servidor: ${CYAN}${SERVER_IP}${NC}"
+    echo -e "${INFO} IP del dominio:  ${CYAN}${DOMAIN_IP}${NC}"
+
+    if [[ "$SERVER_IP" != "$DOMAIN_IP" ]]; then
+        echo -e "${WARN} El dominio ${DOMAIN} no apunta a este servidor."
+        echo -e "${WARN} Asegurate de que el registro A apunte a ${SERVER_IP}"
+        read -rp "    ¿Continuar de todos modos? [s/N]: " CONT
+        [[ "$CONT" != "s" && "$CONT" != "S" ]] && return 1
+    fi
+
+    echo ""
+    echo -e "${INFO} Iniciando instalación para ${CYAN}${DOMAIN}${NC}..."
+    echo ""
+
+    # 1. Instalar dependencias
+    install_dependencies || return 1
+
+    # 2. Generar certificado SSL
+    generate_ssl_certificate "$DOMAIN" "$EMAIL" || return 1
+
+    # 3. Instalar CheckUser
+    install_checkuser_binary || return 1
+
+    # 4. Configurar servicio CheckUser (HTTP interno)
+    configure_checkuser_service || return 1
+
+    # 5. Configurar nginx como proxy SSL
+    configure_nginx_ssl "$DOMAIN" || return 1
+
+    # 6. Configurar firewall
+    configure_firewall
+
+    # 7. Configurar renovación automática
+    setup_auto_renewal "$DOMAIN"
+
+    # 8. Verificación final
+    echo ""
+    echo -e "${INFO} Verificando SSL..."
+    sleep 3
+    
+    ISSUER=$(echo | openssl s_client -connect "${DOMAIN}:2053" 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null)
+
+    echo ""
+    if echo "$ISSUER" | grep -qi "Let's Encrypt\|R10\|R11\|R12"; then
+        echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
+        echo -e "${GREEN}║          INSTALACIÓN COMPLETADA ✓            ║${NC}"
+        echo -e "${GREEN}╠══════════════════════════════════════════════╣${NC}"
+        echo -e "${GREEN}║${NC}  URL: ${CYAN}https://${DOMAIN}:2053${NC}"
+        echo -e "${GREEN}║${NC}  SSL: ${GREEN}Let's Encrypt ✓${NC}"
+        echo -e "${GREEN}║${NC}  Puerto externo: ${CYAN}2053${NC} (nginx SSL)"
+        echo -e "${GREEN}║${NC}  Puerto interno: ${CYAN}2054${NC} (checkuser HTTP)"
+        echo -e "${GREEN}║${NC}  Renovación: ${GREEN}Automática${NC}"
+        echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
+    else
+        echo -e "${WARN} No se pudo verificar el certificado SSL"
+    fi
+
+    echo ""
+    echo -e "Presiona Enter para continuar..."
     read
 }
 
 reinstall_checkuser() {
-    echo -e "\e[1;33m🔄 Reinstalando CheckUser...\e[0m"
+    echo -e "${YELLOW}🔄 Reinstalando CheckUser...${NC}"
+    
+    # Detener servicios
     sudo systemctl stop checkuser &>/dev/null
-    sudo systemctl disable checkuser &>/dev/null
+    sudo systemctl stop nginx &>/dev/null
+    
+    # Eliminar archivos
     sudo rm -f /usr/local/bin/checkuser
     sudo rm -f /etc/systemd/system/checkuser.service
+    sudo rm -f /etc/nginx/sites-enabled/checkuser.conf
     sudo rm -rf /etc/checkuser
+    
     sudo systemctl daemon-reload
+    
     install_checkuser
 }
 
 uninstall_checkuser() {
-    echo -e "\e[1;33m🗑️  Desinstalando CheckUser...\e[0m"
+    echo -e "${YELLOW}🗑️  Desinstalando CheckUser...${NC}"
+    
+    # Detener servicios
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
+    sudo systemctl stop nginx &>/dev/null
+    
+    # Eliminar archivos
     sudo rm -f /usr/local/bin/checkuser
     sudo rm -f /etc/systemd/system/checkuser.service
+    sudo rm -f /etc/nginx/sites-enabled/checkuser.conf
     sudo rm -rf /etc/checkuser
-    sudo systemctl daemon-reload
-    # Eliminar certificados de Let's Encrypt si existen
-    if [[ -n "$domain" ]]; then
-        sudo certbot delete --cert-name "$domain" &>/dev/null
+    
+    # Preguntar si eliminar certificados
+    read -rp "    ¿Eliminar certificados SSL? [s/N]: " DEL_SSL
+    if [[ "$DEL_SSL" == "s" || "$DEL_SSL" == "S" ]]; then
+        echo -e "${INFO} Dominios disponibles:"
+        sudo ls /etc/letsencrypt/live/
+        read -rp "    Dominio a eliminar: " CERT_DOMAIN
+        [[ -n "$CERT_DOMAIN" ]] && sudo certbot delete --cert-name "$CERT_DOMAIN" &>/dev/null
     fi
-    echo -e "\e[1;32m✅ CheckUser desinstalado correctamente\e[0m"
+    
+    sudo systemctl daemon-reload
+    
+    echo -e "${OK} CheckUser desinstalado correctamente"
     echo -e "\nPresiona Enter para continuar..."
     read
 }
@@ -305,20 +425,22 @@ uninstall_checkuser() {
 main() {
     while true; do
         clear
+        echo -e "${CYAN}"
         echo '════════════════════════════════════'
-        echo -ne "     \e[1;33mCHECKUSER v0.1.10\e[0m"
-        if [[ -x /usr/local/bin/checkuser ]]; then
-            echo -e " \e[1;32m[INSTALADO]\e[0m"
+        echo -ne "     CHECKUSER SSL INSTALLER"
+        if systemctl is-active --quiet checkuser 2>/dev/null; then
+            echo -e " ${GREEN}[ACTIVO]${NC}"
         else
-            echo -e " \e[1;31m[NO INSTALADO]\e[0m"
+            echo -e " ${RED}[INACTIVO]${NC}"
         fi
         echo '════════════════════════════════════'
-        echo -e "\e[1;32m[01] - INSTALAR CHECKUSER\e[0m"
-        echo -e "\e[1;32m[02] - REINSTALAR CHECKUSER\e[0m"
-        echo -e "\e[1;32m[03] - DESINSTALAR CHECKUSER\e[0m"
-        echo -e "\e[1;32m[00] - SALIR\e[0m"
+        echo -e "${NC}"
+        echo -e "${GREEN}[01]${NC} - INSTALAR CHECKUSER + SSL"
+        echo -e "${GREEN}[02]${NC} - REINSTALAR CHECKUSER"
+        echo -e "${GREEN}[03]${NC} - DESINSTALAR CHECKUSER"
+        echo -e "${GREEN}[00]${NC} - SALIR"
         echo '════════════════════════════════════'
-        echo -ne "\e[1;32mElige una opción: \e[0m"
+        echo -ne "${GREEN}Elige una opción: ${NC}"
         read option
 
         case $option in
@@ -326,7 +448,7 @@ main() {
             2|02) reinstall_checkuser ;;
             3|03) uninstall_checkuser ;;
             0|00) echo "Saliendo..."; exit 0 ;;
-            *) echo -e "\e[1;31mOpción inválida\e[0m"; sleep 2 ;;
+            *) echo -e "${RED}Opción inválida${NC}"; sleep 2 ;;
         esac
     done
 }
