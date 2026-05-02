@@ -56,6 +56,10 @@ install_checkuser() {
 
     chmod +x /usr/local/bin/checkuser
 
+    # CREAR DIRECTORIO DE TRABAJO
+    mkdir -p /etc/checkuser
+    echo -e "\e[1;32m✅ Directorio /etc/checkuser creado\e[0m"
+
     # Detener servicio existente
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
@@ -106,6 +110,10 @@ EOF
     else
         echo -e "\e[1;31m❌ Error al iniciar el servicio\e[0m"
         echo -e "\e[1;33mLogs: sudo journalctl -u checkuser -n 20\e[0m"
+        
+        # Mostrar el código de salida para debugging
+        echo -e "\n\e[1;33mCódigo de salida del proceso:\e[0m"
+        sudo journalctl -u checkuser --no-pager | grep "code=exited" | tail -1
     fi
 
     echo -e "\nPresiona Enter para continuar..."
