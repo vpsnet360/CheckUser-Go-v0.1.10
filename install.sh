@@ -8,36 +8,12 @@ get_arch() {
     esac
 }
 
-generate_self_signed_cert() {
-    local domain=$1
-    local cert_dir="/etc/checkuser/ssl"
-
-    echo -e "\n🔐 Generando certificado SSL autofirmado para $domain..."
-
-    mkdir -p "$cert_dir"
-
-    openssl req -x509 -newkey rsa:4096 -keyout "$cert_dir/private.key" -out "$cert_dir/certificate.crt" -days 365 -nodes -subj "/CN=$domain"
-
-    if [[ -f "$cert_dir/private.key" && -f "$cert_dir/certificate.crt" ]]; then
-        echo -e "\e[1;32m✅ Certificado SSL generado exitosamente!\e[0m"
-        return 0
-    else
-        echo -e "\e[1;31m❌ Fallo al generar certificado SSL!\e[0m"
-        return 1
-    fi
-}
-
 install_checkuser() {
     echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
-    echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2053)\e[0m"
-    echo -e "\e[1;32m[2] - SSL con certificado autofirmado (HTTPS - Puerto 2053)\e[0m"
-    echo -ne "\e[1;33mElige una opción: \e[0m"
-    read ssl_option
 
-    local port=""
-    local ssl_params=""
+    local port="2053"
 
-    # FIX: verificar que se obtuvo la IP
+    # Obtener IP pública
     local addr
     addr=$(curl -s --max-time 5 https://ipv4.icanhazip.com)
     if [[ -z "$addr" ]]; then
@@ -45,7 +21,7 @@ install_checkuser() {
         return 1
     fi
 
-    # OBTENER LA VERSIÓN CORRECTA
+    # Obtener versión
     local repo="vpsnet360/CheckUser-Go-v0.1.10"
     local latest_release
     latest_release=$(curl -s https://api.github.com/repos/$repo/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
@@ -68,7 +44,6 @@ install_checkuser() {
 
     wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
 
-    # FIX: si falla, intentar URL alternativa y verificar también
     if [[ $? -ne 0 ]]; then
         echo -e "\e[1;31m❌ Error al descargar. Intentando URL alternativa...\e[0m"
         download_url="https://github.com/$repo/releases/download/v0.1.10/$name"
@@ -80,36 +55,6 @@ install_checkuser() {
     fi
 
     chmod +x /usr/local/bin/checkuser
-
-    case $ssl_option in
-        1)
-            port="2053"
-            ssl_params=""
-            final_url="http://$addr:$port"
-            echo -e "\e[1;33m⚠️  Instalando sin SSL\e[0m"
-            ;;
-        2)
-            port="2053"
-            echo -ne "\e[1;33mIngresa tu dominio o IP para el certificado: \e[0m"
-            read custom_domain
-            [[ -z "$custom_domain" ]] && custom_domain="$addr"
-
-            if generate_self_signed_cert "$custom_domain"; then
-                ssl_params="-ssl"
-                final_url="https://$custom_domain:$port"
-                echo -e "\e[1;32m✅ SSL configurado correctamente\e[0m"
-            else
-                echo -e "\e[1;31m❌ Error SSL, instalando sin SSL...\e[0m"
-                port="2053"
-                ssl_params=""
-                final_url="http://$addr:2053"
-            fi
-            ;;
-        *)
-            echo -e "\e[1;31mOpción inválida\e[0m"
-            return 1
-            ;;
-    esac
 
     # Detener servicio existente
     sudo systemctl stop checkuser &>/dev/null
@@ -128,7 +73,7 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/checkuser -start -port $port $ssl_params
+ExecStart=/usr/local/bin/checkuser -start -port $port
 Restart=always
 RestartSec=5
 WorkingDirectory=/etc/checkuser
@@ -143,6 +88,8 @@ EOF
 
     sleep 2
 
+    local final_url="http://$addr:$port"
+
     # Verificar
     if systemctl is-active --quiet checkuser; then
         echo -e "\n\e[1;32m====================================\e[0m"
@@ -151,7 +98,7 @@ EOF
         echo -e "\e[1;32m====================================\e[0m"
 
         # Probar conexión
-        if curl -s --max-time 3 --insecure "$final_url" &>/dev/null; then
+        if curl -s --max-time 3 "$final_url" &>/dev/null; then
             echo -e "\e[1;32m✅ Servicio funcionando correctamente!\e[0m"
         else
             echo -e "\e[1;33m⚠️  Verifica el firewall: sudo ufw allow $port/tcp\e[0m"
@@ -190,7 +137,6 @@ uninstall_checkuser() {
 }
 
 main() {
-    # FIX: bucle en lugar de recursión para evitar stack overflow
     while true; do
         clear
         echo '---------------------------------'
@@ -209,7 +155,6 @@ main() {
         echo -ne "\e[1;32mElige una opción: \e[0m"
         read option
 
-        # FIX: case acepta tanto "1" como "01"
         case $option in
             1|01) install_checkuser ;;
             2|02) reinstall_checkuser ;;
