@@ -29,11 +29,14 @@ install_certbot() {
 
 generate_letsencrypt_cert() {
     local domain=$1
+    local email=$2
     local cert_dir="/etc/checkuser/ssl"
     
     echo -e "\n🔐 Generando certificado SSL con Let's Encrypt para $domain..."
-    echo -e "\e[1;33m⚠️  Asegúrate de que el dominio $domain apunte a este servidor\e[0m"
-    echo -e "\e[1;33m⚠️  Y que el puerto 80 esté libre (detén temporalmente nginx/apache si es necesario)\e[0m"
+    echo -e "\e[1;33m⚠️  REQUISITOS IMPORTANTES:\e[0m"
+    echo -e "\e[1;33m  1. El dominio $domain debe apuntar a este servidor (registro A)\e[0m"
+    echo -e "\e[1;33m  2. El puerto 80 debe estar libre (detén nginx/apache si es necesario)\e[0m"
+    echo -e "\e[1;33m  3. El servidor debe ser accesible desde Internet\e[0m"
     echo -ne "\e[1;33m¿Continuar? [s/N]: \e[0m"
     read confirm
     [[ "$confirm" != "s" && "$confirm" != "S" ]] && return 1
@@ -46,28 +49,52 @@ generate_letsencrypt_cert() {
     mkdir -p "$cert_dir"
     
     # Detener servicios que puedan ocupar el puerto 80 temporalmente
+    echo -e "\e[1;33m🔄 Deteniendo servicios web temporalmente...\e[0m"
     sudo systemctl stop nginx &>/dev/null
     sudo systemctl stop apache2 &>/dev/null
     sudo systemctl stop httpd &>/dev/null
     
     # Generar certificado con certbot standalone
+    echo -e "\e[1;33m🔐 Generando certificado (puede tomar unos segundos)...\e[0m"
     sudo certbot certonly --standalone \
         --non-interactive \
         --agree-tos \
-        --email "admin@$domain" \
-        -d "$domain" \
-        --cert-path "$cert_dir/certificate.crt" \
-        --key-path "$cert_dir/private.key" \
-        --fullchain-path "$cert_dir/fullchain.crt" 2>/tmp/certbot_error.log
+        --email "$email" \
+        -d "$domain" 2>/tmp/certbot_error.log
     
     if [[ $? -eq 0 ]]; then
-        echo -e "\e[1;32m✅ Certificado SSL de Let's Encrypt generado!\e[0m"
-        echo -e "   📁 Certificado: $cert_dir/fullchain.crt"
+        # Copiar certificados al directorio de checkuser
+        sudo cp /etc/letsencrypt/live/$domain/fullchain.pem "$cert_dir/certificate.crt"
+        sudo cp /etc/letsencrypt/live/$domain/privkey.pem "$cert_dir/private.key"
+        sudo chmod 644 "$cert_dir/certificate.crt"
+        sudo chmod 600 "$cert_dir/private.key"
+        
+        echo -e "\e[1;32m✅ Certificado SSL de Let's Encrypt generado exitosamente!\e[0m"
+        echo -e "   📁 Certificado: $cert_dir/certificate.crt"
         echo -e "   🔑 Clave privada: $cert_dir/private.key"
-        echo -e "   ⏰ Válido por 90 días (renovación automática configurada)"
+        echo -e "   ⏰ Válido por 90 días"
         
         # Configurar renovación automática
-        (sudo crontab -l 2>/dev/null; echo "0 0 1 * * certbot renew --quiet --post-hook 'systemctl restart checkuser'") | sudo crontab -
+        echo -e "\e[1;33m🔄 Configurando renovación automática...\e[0m"
+        
+        # Crear script de renovación
+        cat << 'EOF' | sudo tee /etc/checkuser/renew-cert.sh > /dev/null
+#!/bin/bash
+certbot renew --quiet
+cp /etc/letsencrypt/live/$1/fullchain.pem /etc/checkuser/ssl/certificate.crt
+cp /etc/letsencrypt/live/$1/privkey.pem /etc/checkuser/ssl/private.key
+chmod 644 /etc/checkuser/ssl/certificate.crt
+chmod 600 /etc/checkuser/ssl/private.key
+systemctl restart checkuser
+EOF
+        
+        sudo sed -i "s/\$1/$domain/g" /etc/checkuser/renew-cert.sh
+        sudo chmod +x /etc/checkuser/renew-cert.sh
+        
+        # Agregar al crontab para renovación automática
+        (sudo crontab -l 2>/dev/null; echo "0 0 1 * * /etc/checkuser/renew-cert.sh") | sudo crontab - 2>/dev/null
+        
+        echo -e "\e[1;32m✅ Renovación automática configurada (cada mes)\e[0m"
         
         return 0
     else
@@ -77,42 +104,16 @@ generate_letsencrypt_cert() {
     fi
 }
 
-generate_self_signed_cert() {
-    local domain=$1
-    local cert_dir="/etc/checkuser/ssl"
-
-    echo -e "\n🔐 Generando certificado SSL autofirmado para $domain..."
-    echo -e "\e[1;33m⚠️  Este certificado no es válido públicamente - SOLO PARA PRUEBAS\e[0m"
-
-    mkdir -p "$cert_dir"
-
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout "$cert_dir/private.key" \
-        -out "$cert_dir/certificate.crt" \
-        -days 365 \
-        -nodes \
-        -subj "/CN=$domain/O=CheckUser/C=US" 2>/dev/null
-
-    if [[ -f "$cert_dir/private.key" && -f "$cert_dir/certificate.crt" ]]; then
-        echo -e "\e[1;32m✅ Certificado autofirmado generado exitosamente!\e[0m"
-        return 0
-    else
-        echo -e "\e[1;31m❌ Fallo al generar certificado SSL!\e[0m"
-        return 1
-    fi
-}
-
 install_checkuser() {
     echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
     echo -e "\e[1;33m════════════════════════════════════\e[0m"
     echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2053)\e[0m"
-    echo -e "\e[1;32m[2] - SSL con Let's Encrypt (Recomendado)\e[0m"
-    echo -e "\e[1;32m[3] - SSL Autofirmado (Solo pruebas)\e[0m"
+    echo -e "\e[1;32m[2] - Con SSL Let's Encrypt (HTTPS - Puerto 2053) 🔒\e[0m"
     echo -e "\e[1;33m════════════════════════════════════\e[0m"
-    echo -ne "\e[1;33mElige una opción [1-3]: \e[0m"
+    echo -ne "\e[1;33mElige una opción [1-2]: \e[0m"
     read ssl_option
 
-    local port=""
+    local port="2053"
     local ssl_params=""
 
     # Obtener IP pública
@@ -164,51 +165,34 @@ install_checkuser() {
 
     case $ssl_option in
         1)
-            port="2053"
             ssl_params=""
             final_url="http://$addr:$port"
             echo -e "\e[1;33m⚠️  Modo HTTP sin SSL - No recomendado para producción\e[0m"
             ;;
         2)
-            port="2053"
             echo -ne "\e[1;33m🌐 Ingresa tu dominio (ej: check.midominio.com): \e[0m"
             read custom_domain
-            [[ -z "$custom_domain" ]] && custom_domain="$addr"
-
-            if generate_letsencrypt_cert "$custom_domain"; then
-                ssl_params="-ssl"
-                final_url="https://$custom_domain:$port"
-                echo -e "\e[1;32m✅ SSL Let's Encrypt configurado!\e[0m"
+            
+            if [[ -z "$custom_domain" ]]; then
+                echo -e "\e[1;31m❌ Debes ingresar un dominio para SSL\e[0m"
+                echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
+                ssl_params=""
+                final_url="http://$addr:$port"
             else
-                echo -e "\e[1;31m❌ Error con Let's Encrypt. ¿Usar SSL autofirmado? [s/N]: \e[0m"
-                read use_self
-                if [[ "$use_self" == "s" || "$use_self" == "S" ]]; then
-                    if generate_self_signed_cert "$custom_domain"; then
-                        ssl_params="-ssl"
-                        final_url="https://$custom_domain:$port"
-                    else
-                        echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
-                        final_url="http://$addr:$port"
-                    fi
+                echo -ne "\e[1;33m📧 Ingresa tu email para Let's Encrypt: \e[0m"
+                read email
+                [[ -z "$email" ]] && email="admin@$custom_domain"
+                
+                if generate_letsencrypt_cert "$custom_domain" "$email"; then
+                    ssl_params="-ssl"
+                    final_url="https://$custom_domain:$port"
+                    echo -e "\e[1;32m✅ SSL Let's Encrypt configurado - Certificado VÁLIDO!\e[0m"
                 else
+                    echo -e "\e[1;31m❌ No se pudo generar el certificado SSL\e[0m"
                     echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
+                    ssl_params=""
                     final_url="http://$addr:$port"
                 fi
-            fi
-            ;;
-        3)
-            port="2053"
-            echo -ne "\e[1;33m🌐 Ingresa tu dominio o IP (solo pruebas): \e[0m"
-            read custom_domain
-            [[ -z "$custom_domain" ]] && custom_domain="$addr"
-
-            if generate_self_signed_cert "$custom_domain"; then
-                ssl_params="-ssl"
-                final_url="https://$custom_domain:$port"
-                echo -e "\e[1;32m⚠️  SSL Autofirmado - SOLO PARA PRUEBAS\e[0m"
-            else
-                echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
-                final_url="http://$addr:$port"
             fi
             ;;
         *)
@@ -217,19 +201,20 @@ install_checkuser() {
             ;;
     esac
 
-    # ABRIR PUERTO EN EL FIREWALL
+    # ABRIR PUERTOS EN EL FIREWALL
     if command -v ufw &>/dev/null; then
-        echo -e "\e[1;33m🔓 Abriendo puerto $port en UFW...\e[0m"
+        echo -e "\e[1;33m🔓 Configurando firewall...\e[0m"
         sudo ufw allow $port/tcp &>/dev/null
+        [[ -n "$ssl_params" ]] && sudo ufw allow 80/tcp &>/dev/null
         sudo ufw reload &>/dev/null
         echo -e "\e[1;32m✅ Puerto $port/tcp abierto en UFW\e[0m"
+        [[ -n "$ssl_params" ]] && echo -e "\e[1;32m✅ Puerto 80/tcp abierto en UFW (para renovación)\e[0m"
     elif command -v firewall-cmd &>/dev/null; then
-        echo -e "\e[1;33m🔓 Abriendo puerto $port en firewalld...\e[0m"
+        echo -e "\e[1;33m🔓 Configurando firewall...\e[0m"
         sudo firewall-cmd --permanent --add-port=$port/tcp &>/dev/null
+        [[ -n "$ssl_params" ]] && sudo firewall-cmd --permanent --add-port=80/tcp &>/dev/null
         sudo firewall-cmd --reload &>/dev/null
         echo -e "\e[1;32m✅ Puerto $port/tcp abierto en firewalld\e[0m"
-    else
-        echo -e "\e[1;33m⚠️  No se detectó UFW ni firewalld. Abre el puerto $port manualmente.\e[0m"
     fi
 
     # Detener servicio existente
@@ -270,11 +255,11 @@ EOF
         echo -e "\e[1;32m✅ CheckUser v0.1.10 INSTALADO!\e[0m"
         echo -e "\e[1;32m🌐 URL: \e[1;33m$final_url\e[0m"
         echo -e "\e[1;32m🔓 Puerto: \e[1;33m$port/tcp\e[0m"
-        [[ -n "$ssl_params" ]] && echo -e "\e[1;32m🔒 SSL: \e[1;33mActivado\e[0m" || echo -e "\e[1;31m⚠️  SSL: \e[1;33mDesactivado\e[0m"
+        [[ -n "$ssl_params" ]] && echo -e "\e[1;32m🔒 SSL: \e[1;33mLet's Encrypt (Válido)\e[0m" || echo -e "\e[1;31m⚠️  SSL: \e[1;33mDesactivado\e[0m"
         echo -e "\e[1;32m════════════════════════════════════\e[0m"
 
         # Probar conexión
-        if curl -s --max-time 3 --insecure "$final_url" &>/dev/null; then
+        if curl -s --max-time 3 "$final_url" &>/dev/null; then
             echo -e "\e[1;32m✅ Servicio funcionando correctamente!\e[0m"
         else
             echo -e "\e[1;33m⚠️  Verifica la conectividad al puerto $port\e[0m"
@@ -308,6 +293,10 @@ uninstall_checkuser() {
     sudo rm -f /etc/systemd/system/checkuser.service
     sudo rm -rf /etc/checkuser
     sudo systemctl daemon-reload
+    # Eliminar certificados de Let's Encrypt si existen
+    if [[ -n "$domain" ]]; then
+        sudo certbot delete --cert-name "$domain" &>/dev/null
+    fi
     echo -e "\e[1;32m✅ CheckUser desinstalado correctamente\e[0m"
     echo -e "\nPresiona Enter para continuar..."
     read
