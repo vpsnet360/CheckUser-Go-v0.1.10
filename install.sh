@@ -29,7 +29,7 @@ generate_self_signed_cert() {
 
 install_checkuser() {
     echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
-    echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2052)\e[0m"
+    echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2053)\e[0m"
     echo -e "\e[1;32m[2] - SSL con certificado autofirmado (HTTPS - Puerto 2053)\e[0m"
     echo -ne "\e[1;33mElige una opción: \e[0m"
     read ssl_option
@@ -83,7 +83,7 @@ install_checkuser() {
 
     case $ssl_option in
         1)
-            port="2052"
+            port="2053"
             ssl_params=""
             final_url="http://$addr:$port"
             echo -e "\e[1;33m⚠️  Instalando sin SSL\e[0m"
@@ -95,14 +95,14 @@ install_checkuser() {
             [[ -z "$custom_domain" ]] && custom_domain="$addr"
 
             if generate_self_signed_cert "$custom_domain"; then
-                ssl_params="--ssl --cert /etc/checkuser/ssl/certificate.crt --key /etc/checkuser/ssl/private.key"
+                ssl_params="-ssl -cert /etc/checkuser/ssl/certificate.crt -key /etc/checkuser/ssl/private.key"
                 final_url="https://$custom_domain:$port"
                 echo -e "\e[1;32m✅ SSL configurado correctamente\e[0m"
             else
                 echo -e "\e[1;31m❌ Error SSL, instalando sin SSL...\e[0m"
-                port="2052"
+                port="2053"
                 ssl_params=""
-                final_url="http://$addr:2052"
+                final_url="http://$addr:2053"
             fi
             ;;
         *)
@@ -128,7 +128,7 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/checkuser --start --port $port $ssl_params
+ExecStart=/usr/local/bin/checkuser -start -port $port $ssl_params
 Restart=always
 RestartSec=5
 WorkingDirectory=/etc/checkuser
