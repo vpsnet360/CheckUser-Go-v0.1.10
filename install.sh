@@ -11,13 +11,13 @@ get_arch() {
 generate_self_signed_cert() {
     local domain=$1
     local cert_dir="/etc/checkuser/ssl"
-    
+
     echo -e "\n🔐 Generando certificado SSL autofirmado para $domain..."
-    
+
     mkdir -p "$cert_dir"
-    
+
     openssl req -x509 -newkey rsa:4096 -keyout "$cert_dir/private.key" -out "$cert_dir/certificate.crt" -days 365 -nodes -subj "/CN=$domain"
-    
+
     if [[ -f "$cert_dir/private.key" && -f "$cert_dir/certificate.crt" ]]; then
         echo -e "\e[1;32m✅ Certificado SSL generado exitosamente!\e[0m"
         return 0
@@ -28,7 +28,7 @@ generate_self_signed_cert() {
 }
 
 install_checkuser() {
-    echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v1.1.10\e[0m"
+    echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
     echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2052)\e[0m"
     echo -e "\e[1;32m[2] - SSL con certificado autofirmado (HTTPS - Puerto 2053)\e[0m"
     echo -ne "\e[1;33mElige una opción: \e[0m"
@@ -36,18 +36,27 @@ install_checkuser() {
 
     local port=""
     local ssl_params=""
-    local addr=$(curl -s https://ipv4.icanhazip.com)
-    
+
+    # FIX: verificar que se obtuvo la IP
+    local addr
+    addr=$(curl -s --max-time 5 https://ipv4.icanhazip.com)
+    if [[ -z "$addr" ]]; then
+        echo -e "\e[1;31m❌ No se pudo obtener la IP pública. Verifica tu conexión.\e[0m"
+        return 1
+    fi
+
     # OBTENER LA VERSIÓN CORRECTA
     local repo="vpsnet360/CheckUser-Go-v0.1.10"
-    local latest_release=$(curl -s https://api.github.com/repos/$repo/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-    
+    local latest_release
+    latest_release=$(curl -s https://api.github.com/repos/$repo/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
     if [[ -z "$latest_release" ]]; then
         echo -e "\e[1;31m❌ No se pudo obtener la última versión. Usando versión por defecto\e[0m"
-        latest_release="v1.1.10"
+        latest_release="v0.1.10"
     fi
-    
-    local arch=$(get_arch)
+
+    local arch
+    arch=$(get_arch)
     if [ "$arch" = "unsupported" ]; then
         echo -e "\e[1;31mArquitectura de CPU no soportada!\e[0m"
         exit 1
@@ -56,15 +65,20 @@ install_checkuser() {
     echo -e "\e[1;33m📥 Descargando CheckUser versión: $latest_release para $arch...\e[0m"
     local name="checkuser-linux-$arch"
     local download_url="https://github.com/$repo/releases/download/$latest_release/$name"
-    
+
     wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
-    
+
+    # FIX: si falla, intentar URL alternativa y verificar también
     if [[ $? -ne 0 ]]; then
         echo -e "\e[1;31m❌ Error al descargar. Intentando URL alternativa...\e[0m"
-        download_url="https://github.com/$repo/releases/download/v1.1.10/$name"
+        download_url="https://github.com/$repo/releases/download/v0.1.10/$name"
         wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
+        if [[ $? -ne 0 ]]; then
+            echo -e "\e[1;31m❌ No se pudo descargar el binario. Abortando.\e[0m"
+            return 1
+        fi
     fi
-    
+
     chmod +x /usr/local/bin/checkuser
 
     case $ssl_option in
@@ -79,7 +93,7 @@ install_checkuser() {
             echo -ne "\e[1;33mIngresa tu dominio o IP para el certificado: \e[0m"
             read custom_domain
             [[ -z "$custom_domain" ]] && custom_domain="$addr"
-            
+
             if generate_self_signed_cert "$custom_domain"; then
                 ssl_params="--ssl --cert /etc/checkuser/ssl/certificate.crt --key /etc/checkuser/ssl/private.key"
                 final_url="https://$custom_domain:$port"
@@ -106,7 +120,7 @@ install_checkuser() {
     # Crear servicio systemd
     cat << EOF | sudo tee /etc/systemd/system/checkuser.service > /dev/null
 [Unit]
-Description=CheckUser Service v1.1.10
+Description=CheckUser Service v0.1.10
 After=network.target nss-lookup.target
 
 [Service]
@@ -132,10 +146,10 @@ EOF
     # Verificar
     if systemctl is-active --quiet checkuser; then
         echo -e "\n\e[1;32m====================================\e[0m"
-        echo -e "\e[1;32m✅ CheckUser v1.1.10 INSTALADO!\e[0m"
+        echo -e "\e[1;32m✅ CheckUser v0.1.10 INSTALADO!\e[0m"
         echo -e "\e[1;32m🌐 URL: \e[1;33m$final_url\e[0m"
         echo -e "\e[1;32m====================================\e[0m"
-        
+
         # Probar conexión
         if curl -s --max-time 3 --insecure "$final_url" &>/dev/null; then
             echo -e "\e[1;32m✅ Servicio funcionando correctamente!\e[0m"
@@ -146,7 +160,7 @@ EOF
         echo -e "\e[1;31m❌ Error al iniciar el servicio\e[0m"
         echo -e "\e[1;33mLogs: sudo journalctl -u checkuser -n 20\e[0m"
     fi
-    
+
     echo -e "\nPresiona Enter para continuar..."
     read
 }
@@ -176,30 +190,34 @@ uninstall_checkuser() {
 }
 
 main() {
-    clear
-    echo '---------------------------------'
-    echo -ne '     \e[1;33mCHECKUSER v1.1.10\e[0m'
-    if [[ -x /usr/local/bin/checkuser ]]; then
-        echo -e ' \e[1;32m[INSTALADO]\e[0m'
-    else
-        echo -e ' \e[1;31m[NO INSTALADO]\e[0m'
-    fi
-    echo '---------------------------------'
-    echo -e '\e[1;32m[01] - INSTALAR CHECKUSER\e[0m'
-    echo -e '\e[1;32m[02] - REINSTALAR CHECKUSER\e[0m'
-    echo -e '\e[1;32m[03] - DESINSTALAR CHECKUSER\e[0m'
-    echo -e '\e[1;32m[00] - SALIR\e[0m'
-    echo '---------------------------------'
-    echo -ne '\e[1;32mElige una opción: \e[0m'
-    read option
+    # FIX: bucle en lugar de recursión para evitar stack overflow
+    while true; do
+        clear
+        echo '---------------------------------'
+        echo -ne "     \e[1;33mCHECKUSER v0.1.10\e[0m"
+        if [[ -x /usr/local/bin/checkuser ]]; then
+            echo -e " \e[1;32m[INSTALADO]\e[0m"
+        else
+            echo -e " \e[1;31m[NO INSTALADO]\e[0m"
+        fi
+        echo '---------------------------------'
+        echo -e "\e[1;32m[01] - INSTALAR CHECKUSER\e[0m"
+        echo -e "\e[1;32m[02] - REINSTALAR CHECKUSER\e[0m"
+        echo -e "\e[1;32m[03] - DESINSTALAR CHECKUSER\e[0m"
+        echo -e "\e[1;32m[00] - SALIR\e[0m"
+        echo '---------------------------------'
+        echo -ne "\e[1;32mElige una opción: \e[0m"
+        read option
 
-    case $option in
-        1) install_checkuser; main ;;
-        2) reinstall_checkuser; main ;;
-        3) uninstall_checkuser; main ;;
-        0) echo "Saliendo..." ; exit 0 ;;
-        *) echo -e "\e[1;31mOpción inválida\e[0m"; sleep 2; main ;;
-    esac
+        # FIX: case acepta tanto "1" como "01"
+        case $option in
+            1|01) install_checkuser ;;
+            2|02) reinstall_checkuser ;;
+            3|03) uninstall_checkuser ;;
+            0|00) echo "Saliendo..."; exit 0 ;;
+            *) echo -e "\e[1;31mOpción inválida\e[0m"; sleep 2 ;;
+        esac
+    done
 }
 
 main
