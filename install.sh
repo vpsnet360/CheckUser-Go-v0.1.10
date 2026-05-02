@@ -8,10 +8,112 @@ get_arch() {
     esac
 }
 
+install_certbot() {
+    echo -e "\n\e[1;33m📦 Instalando Certbot...\e[0m"
+    
+    if command -v apt &>/dev/null; then
+        sudo apt update -y &>/dev/null
+        sudo apt install -y certbot &>/dev/null
+    elif command -v yum &>/dev/null; then
+        sudo yum install -y certbot &>/dev/null
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y certbot &>/dev/null
+    else
+        echo -e "\e[1;31m❌ No se pudo instalar certbot. Instala manualmente\e[0m"
+        return 1
+    fi
+    
+    echo -e "\e[1;32m✅ Certbot instalado\e[0m"
+    return 0
+}
+
+generate_letsencrypt_cert() {
+    local domain=$1
+    local cert_dir="/etc/checkuser/ssl"
+    
+    echo -e "\n🔐 Generando certificado SSL con Let's Encrypt para $domain..."
+    echo -e "\e[1;33m⚠️  Asegúrate de que el dominio $domain apunte a este servidor\e[0m"
+    echo -e "\e[1;33m⚠️  Y que el puerto 80 esté libre (detén temporalmente nginx/apache si es necesario)\e[0m"
+    echo -ne "\e[1;33m¿Continuar? [s/N]: \e[0m"
+    read confirm
+    [[ "$confirm" != "s" && "$confirm" != "S" ]] && return 1
+    
+    # Instalar certbot si no existe
+    if ! command -v certbot &>/dev/null; then
+        install_certbot || return 1
+    fi
+    
+    mkdir -p "$cert_dir"
+    
+    # Detener servicios que puedan ocupar el puerto 80 temporalmente
+    sudo systemctl stop nginx &>/dev/null
+    sudo systemctl stop apache2 &>/dev/null
+    sudo systemctl stop httpd &>/dev/null
+    
+    # Generar certificado con certbot standalone
+    sudo certbot certonly --standalone \
+        --non-interactive \
+        --agree-tos \
+        --email "admin@$domain" \
+        -d "$domain" \
+        --cert-path "$cert_dir/certificate.crt" \
+        --key-path "$cert_dir/private.key" \
+        --fullchain-path "$cert_dir/fullchain.crt" 2>/tmp/certbot_error.log
+    
+    if [[ $? -eq 0 ]]; then
+        echo -e "\e[1;32m✅ Certificado SSL de Let's Encrypt generado!\e[0m"
+        echo -e "   📁 Certificado: $cert_dir/fullchain.crt"
+        echo -e "   🔑 Clave privada: $cert_dir/private.key"
+        echo -e "   ⏰ Válido por 90 días (renovación automática configurada)"
+        
+        # Configurar renovación automática
+        (sudo crontab -l 2>/dev/null; echo "0 0 1 * * certbot renew --quiet --post-hook 'systemctl restart checkuser'") | sudo crontab -
+        
+        return 0
+    else
+        echo -e "\e[1;31m❌ Error al generar certificado Let's Encrypt\e[0m"
+        echo -e "\e[1;33mError: $(cat /tmp/certbot_error.log)\e[0m"
+        return 1
+    fi
+}
+
+generate_self_signed_cert() {
+    local domain=$1
+    local cert_dir="/etc/checkuser/ssl"
+
+    echo -e "\n🔐 Generando certificado SSL autofirmado para $domain..."
+    echo -e "\e[1;33m⚠️  Este certificado no es válido públicamente - SOLO PARA PRUEBAS\e[0m"
+
+    mkdir -p "$cert_dir"
+
+    openssl req -x509 -newkey rsa:4096 \
+        -keyout "$cert_dir/private.key" \
+        -out "$cert_dir/certificate.crt" \
+        -days 365 \
+        -nodes \
+        -subj "/CN=$domain/O=CheckUser/C=US" 2>/dev/null
+
+    if [[ -f "$cert_dir/private.key" && -f "$cert_dir/certificate.crt" ]]; then
+        echo -e "\e[1;32m✅ Certificado autofirmado generado exitosamente!\e[0m"
+        return 0
+    else
+        echo -e "\e[1;31m❌ Fallo al generar certificado SSL!\e[0m"
+        return 1
+    fi
+}
+
 install_checkuser() {
     echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
+    echo -e "\e[1;33m════════════════════════════════════\e[0m"
+    echo -e "\e[1;32m[1] - Sin SSL (HTTP - Puerto 2053)\e[0m"
+    echo -e "\e[1;32m[2] - SSL con Let's Encrypt (Recomendado)\e[0m"
+    echo -e "\e[1;32m[3] - SSL Autofirmado (Solo pruebas)\e[0m"
+    echo -e "\e[1;33m════════════════════════════════════\e[0m"
+    echo -ne "\e[1;33mElige una opción [1-3]: \e[0m"
+    read ssl_option
 
-    local port="2052"
+    local port=""
+    local ssl_params=""
 
     # Obtener IP pública
     local addr
@@ -60,6 +162,76 @@ install_checkuser() {
     mkdir -p /etc/checkuser
     echo -e "\e[1;32m✅ Directorio /etc/checkuser creado\e[0m"
 
+    case $ssl_option in
+        1)
+            port="2053"
+            ssl_params=""
+            final_url="http://$addr:$port"
+            echo -e "\e[1;33m⚠️  Modo HTTP sin SSL - No recomendado para producción\e[0m"
+            ;;
+        2)
+            port="2053"
+            echo -ne "\e[1;33m🌐 Ingresa tu dominio (ej: check.midominio.com): \e[0m"
+            read custom_domain
+            [[ -z "$custom_domain" ]] && custom_domain="$addr"
+
+            if generate_letsencrypt_cert "$custom_domain"; then
+                ssl_params="-ssl"
+                final_url="https://$custom_domain:$port"
+                echo -e "\e[1;32m✅ SSL Let's Encrypt configurado!\e[0m"
+            else
+                echo -e "\e[1;31m❌ Error con Let's Encrypt. ¿Usar SSL autofirmado? [s/N]: \e[0m"
+                read use_self
+                if [[ "$use_self" == "s" || "$use_self" == "S" ]]; then
+                    if generate_self_signed_cert "$custom_domain"; then
+                        ssl_params="-ssl"
+                        final_url="https://$custom_domain:$port"
+                    else
+                        echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
+                        final_url="http://$addr:$port"
+                    fi
+                else
+                    echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
+                    final_url="http://$addr:$port"
+                fi
+            fi
+            ;;
+        3)
+            port="2053"
+            echo -ne "\e[1;33m🌐 Ingresa tu dominio o IP (solo pruebas): \e[0m"
+            read custom_domain
+            [[ -z "$custom_domain" ]] && custom_domain="$addr"
+
+            if generate_self_signed_cert "$custom_domain"; then
+                ssl_params="-ssl"
+                final_url="https://$custom_domain:$port"
+                echo -e "\e[1;32m⚠️  SSL Autofirmado - SOLO PARA PRUEBAS\e[0m"
+            else
+                echo -e "\e[1;33m⚠️  Instalando sin SSL...\e[0m"
+                final_url="http://$addr:$port"
+            fi
+            ;;
+        *)
+            echo -e "\e[1;31m❌ Opción inválida\e[0m"
+            return 1
+            ;;
+    esac
+
+    # ABRIR PUERTO EN EL FIREWALL
+    if command -v ufw &>/dev/null; then
+        echo -e "\e[1;33m🔓 Abriendo puerto $port en UFW...\e[0m"
+        sudo ufw allow $port/tcp &>/dev/null
+        sudo ufw reload &>/dev/null
+        echo -e "\e[1;32m✅ Puerto $port/tcp abierto en UFW\e[0m"
+    elif command -v firewall-cmd &>/dev/null; then
+        echo -e "\e[1;33m🔓 Abriendo puerto $port en firewalld...\e[0m"
+        sudo firewall-cmd --permanent --add-port=$port/tcp &>/dev/null
+        sudo firewall-cmd --reload &>/dev/null
+        echo -e "\e[1;32m✅ Puerto $port/tcp abierto en firewalld\e[0m"
+    else
+        echo -e "\e[1;33m⚠️  No se detectó UFW ni firewalld. Abre el puerto $port manualmente.\e[0m"
+    fi
+
     # Detener servicio existente
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
@@ -77,7 +249,7 @@ User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
-ExecStart=/usr/local/bin/checkuser -start -port $port
+ExecStart=/usr/local/bin/checkuser -start -port $port $ssl_params
 Restart=always
 RestartSec=5
 WorkingDirectory=/etc/checkuser
@@ -92,28 +264,25 @@ EOF
 
     sleep 2
 
-    local final_url="http://$addr:$port"
-
     # Verificar
     if systemctl is-active --quiet checkuser; then
-        echo -e "\n\e[1;32m====================================\e[0m"
+        echo -e "\n\e[1;32m════════════════════════════════════\e[0m"
         echo -e "\e[1;32m✅ CheckUser v0.1.10 INSTALADO!\e[0m"
         echo -e "\e[1;32m🌐 URL: \e[1;33m$final_url\e[0m"
-        echo -e "\e[1;32m====================================\e[0m"
+        echo -e "\e[1;32m🔓 Puerto: \e[1;33m$port/tcp\e[0m"
+        [[ -n "$ssl_params" ]] && echo -e "\e[1;32m🔒 SSL: \e[1;33mActivado\e[0m" || echo -e "\e[1;31m⚠️  SSL: \e[1;33mDesactivado\e[0m"
+        echo -e "\e[1;32m════════════════════════════════════\e[0m"
 
         # Probar conexión
-        if curl -s --max-time 3 "$final_url" &>/dev/null; then
+        if curl -s --max-time 3 --insecure "$final_url" &>/dev/null; then
             echo -e "\e[1;32m✅ Servicio funcionando correctamente!\e[0m"
         else
-            echo -e "\e[1;33m⚠️  Verifica el firewall: sudo ufw allow $port/tcp\e[0m"
+            echo -e "\e[1;33m⚠️  Verifica la conectividad al puerto $port\e[0m"
         fi
     else
         echo -e "\e[1;31m❌ Error al iniciar el servicio\e[0m"
         echo -e "\e[1;33mLogs: sudo journalctl -u checkuser -n 20\e[0m"
-        
-        # Mostrar el código de salida para debugging
-        echo -e "\n\e[1;33mCódigo de salida del proceso:\e[0m"
-        sudo journalctl -u checkuser --no-pager | grep "code=exited" | tail -1
+        sudo journalctl -u checkuser --no-pager -n 5
     fi
 
     echo -e "\nPresiona Enter para continuar..."
@@ -121,7 +290,7 @@ EOF
 }
 
 reinstall_checkuser() {
-    echo "Reinstalando CheckUser..."
+    echo -e "\e[1;33m🔄 Reinstalando CheckUser...\e[0m"
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
     sudo rm -f /usr/local/bin/checkuser
@@ -132,14 +301,14 @@ reinstall_checkuser() {
 }
 
 uninstall_checkuser() {
-    echo "Desinstalando CheckUser..."
+    echo -e "\e[1;33m🗑️  Desinstalando CheckUser...\e[0m"
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl disable checkuser &>/dev/null
     sudo rm -f /usr/local/bin/checkuser
     sudo rm -f /etc/systemd/system/checkuser.service
     sudo rm -rf /etc/checkuser
     sudo systemctl daemon-reload
-    echo -e "\e[1;32m✅ CheckUser desinstalado\e[0m"
+    echo -e "\e[1;32m✅ CheckUser desinstalado correctamente\e[0m"
     echo -e "\nPresiona Enter para continuar..."
     read
 }
@@ -147,19 +316,19 @@ uninstall_checkuser() {
 main() {
     while true; do
         clear
-        echo '---------------------------------'
+        echo '════════════════════════════════════'
         echo -ne "     \e[1;33mCHECKUSER v0.1.10\e[0m"
         if [[ -x /usr/local/bin/checkuser ]]; then
             echo -e " \e[1;32m[INSTALADO]\e[0m"
         else
             echo -e " \e[1;31m[NO INSTALADO]\e[0m"
         fi
-        echo '---------------------------------'
+        echo '════════════════════════════════════'
         echo -e "\e[1;32m[01] - INSTALAR CHECKUSER\e[0m"
         echo -e "\e[1;32m[02] - REINSTALAR CHECKUSER\e[0m"
         echo -e "\e[1;32m[03] - DESINSTALAR CHECKUSER\e[0m"
         echo -e "\e[1;32m[00] - SALIR\e[0m"
-        echo '---------------------------------'
+        echo '════════════════════════════════════'
         echo -ne "\e[1;32mElige una opción: \e[0m"
         read option
 
