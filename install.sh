@@ -95,7 +95,7 @@ install_checkuser() {
             [[ -z "$custom_domain" ]] && custom_domain="$addr"
 
             if generate_self_signed_cert "$custom_domain"; then
-                ssl_params="-ssl -cert /etc/checkuser/ssl/certificate.crt -key /etc/checkuser/ssl/private.key"
+                ssl_params="-ssl"
                 final_url="https://$custom_domain:$port"
                 echo -e "\e[1;32m✅ SSL configurado correctamente\e[0m"
             else
