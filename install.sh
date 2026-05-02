@@ -11,7 +11,7 @@ get_arch() {
 install_checkuser() {
     echo -e "\n\e[1;36m⚙️  Configuración de CheckUser v0.1.10\e[0m"
 
-    local port="2053"
+    local port="2052"
 
     # Obtener IP pública
     local addr
