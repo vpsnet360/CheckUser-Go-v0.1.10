@@ -170,6 +170,24 @@ install_checkuser_binary() {
     local latest_version=""
     local selected_repo=""
     
+install_checkuser_binary() {
+    if [[ -x /usr/local/bin/checkuser ]]; then
+        local current_version
+        current_version=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
+        echo -e "${OK} CheckUser ya instalado (versión: ${CYAN}${current_version}${NC})"
+        
+        echo -ne "${WARN} ¿Buscar actualización? [s/N]: "
+        read update_confirm
+        [[ "$update_confirm" != "s" && "$update_confirm" != "S" ]] && return 0
+    fi
+
+    local repos=(
+        "DTunnel0/CheckUser-Go"
+    )
+    
+    local latest_version=""
+    local selected_repo=""
+    
     for repo in "${repos[@]}"; do
         echo -e "${INFO} Buscando en repositorio: ${CYAN}${repo}${NC}"
         latest_version=$(get_latest_version "$repo")
@@ -236,8 +254,7 @@ install_checkuser_binary() {
     done
     
     echo -e "${ERR} No se encontró binario funcional en $selected_repo"
-    return 1
-}
+    return bin
 
 configure_checkuser_service() {
     echo -e "${INFO} Configurando servicio CheckUser (HTTP:2054)..."
