@@ -29,18 +29,25 @@ get_latest_version() {
     
     echo -e "${INFO} Buscando última versión de CheckUser..."
     
-    # Intentar obtener la última versión de GitHub
-    latest_release=$(curl -s "https://api.github.com/repos/$repo/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    # CORRECCIÓN: Usar el endpoint correcto y validar respuesta
+    local response
+    response=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
     
-    if [[ -z "$latest_release" ]]; then
-        echo -e "${WARN} No se pudo obtener versión de GitHub. Intentando método alternativo..."
-        
-        # Método alternativo: listar releases y tomar la primera
-        latest_release=$(curl -s "https://api.github.com/repos/$repo/releases?per_page=1" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    # Verificar si la respuesta es válida
+    if echo "$response" | grep -q "Not Found"; then
+        echo -e "${WARN} Repositorio $repo no encontrado"
+        return 1
     fi
     
+    if echo "$response" | grep -q "rate limit exceeded"; then
+        echo -e "${ERR} Rate limit de GitHub excedido"
+        return 1
+    fi
+    
+    latest_release=$(echo "$response" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    
     if [[ -z "$latest_release" ]]; then
-        echo -e "${ERR} No se pudo determinar la última versión"
+        echo -e "${WARN} No se pudo obtener versión de $repo"
         return 1
     fi
     
@@ -74,13 +81,11 @@ install_checkuser_binary() {
         current_version=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
         echo -e "${OK} CheckUser ya instalado (versión: ${CYAN}${current_version}${NC})"
         
-        # Preguntar si quiere actualizar
         echo -ne "${WARN} ¿Buscar actualización? [s/N]: "
         read update_confirm
         [[ "$update_confirm" != "s" && "$update_confirm" != "S" ]] && return 0
     fi
 
-    # Repositorios a probar (en orden de prioridad)
     local repos=(
         "DTunnel0/CheckUser-Go"
         "vpsnet360/CheckUser-Go-v0.1.10"
@@ -89,7 +94,6 @@ install_checkuser_binary() {
     local latest_version=""
     local selected_repo=""
     
-    # Intentar obtener última versión de diferentes repos
     for repo in "${repos[@]}"; do
         echo -e "${INFO} Buscando en repositorio: ${CYAN}${repo}${NC}"
         latest_version=$(get_latest_version "$repo")
@@ -114,47 +118,70 @@ install_checkuser_binary() {
 
     echo -e "${INFO} Versión: ${CYAN}${latest_version}${NC} | Arquitectura: ${CYAN}${arch}${NC}"
     
-    local name="checkuser-linux-$arch"
-    local download_url="https://github.com/$selected_repo/releases/download/$latest_version/$name"
+    # CORRECCIÓN: Obtener la lista de assets disponibles para este release
+    echo -e "${INFO} Obteniendo lista de archivos disponibles..."
+    local assets_url="https://api.github.com/repos/$selected_repo/releases/tags/$latest_version"
+    local assets_json
+    assets_json=$(curl -s "$assets_url" | grep -oP '"browser_download_url": "\K[^"]+' || echo "")
     
-    echo -e "${INFO} Descargando CheckUser..."
+    if [[ -z "$assets_json" ]]; then
+        echo -e "${WARN} No se pudo obtener lista de assets, probando nombres comunes..."
+        assets_json="https://github.com/$selected_repo/releases/download/$latest_version/checkuser-linux-$arch
+https://github.com/$selected_repo/releases/download/$latest_version/checkuser-$arch
+https://github.com/$selected_repo/releases/download/$latest_version/checkuser"
+    fi
     
-    # Intentar descargar
-    if wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser 2>/dev/null; then
-        chmod +x /usr/local/bin/checkuser
-        echo -e "${OK} CheckUser ${latest_version} instalado exitosamente"
+    # Intentar descargar con cada URL disponible
+    local download_success=false
+    
+    while IFS= read -r download_url; do
+        [[ -z "$download_url" ]] && continue
+        
+        local filename=$(basename "$download_url")
+        echo -e "${INFO} Probando: ${CYAN}$filename${NC}"
+        
+        if wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser 2>/dev/null; then
+            chmod +x /usr/local/bin/checkuser
+            
+            # Verificar que el binario funciona
+            if /usr/local/bin/checkuser -version &>/dev/null; then
+                echo -e "${OK} CheckUser ${latest_version} instalado y funcionando"
+                download_success=true
+                break
+            else
+                echo -e "${WARN} Binario descargado pero no funciona, probando siguiente..."
+                rm -f /usr/local/bin/checkuser
+            fi
+        fi
+    done <<< "$assets_json"
+    
+    if [[ "$download_success" = true ]]; then
         return 0
     fi
     
-    # Si falla, intentar nombres alternativos
-    local alt_names=(
-        "checkuser-linux-$arch"
-        "checkuser-$arch"
-        "checkuser"
+    # Fallback manual con URLs comunes
+    echo -e "${WARN} Intentando URLs alternativas..."
+    local fallback_urls=(
+        "https://github.com/$selected_repo/releases/download/$latest_version/checkuser-linux-$arch"
+        "https://github.com/$selected_repo/releases/download/$latest_version/checkuser-$arch"
+        "https://github.com/$selected_repo/releases/download/$latest_version/checkuser"
+        "https://github.com/DTunnel0/CheckUser-Go/releases/latest/download/checkuser-linux-$arch"
     )
     
-    for alt_name in "${alt_names[@]}"; do
-        local alt_url="https://github.com/$selected_repo/releases/download/$latest_version/$alt_name"
-        echo -e "${WARN} Intentando nombre alternativo: ${alt_name}"
-        
-        if wget -q --show-progress "$alt_url" -O /usr/local/bin/checkuser 2>/dev/null; then
+    for fallback_url in "${fallback_urls[@]}"; do
+        echo -e "${INFO} Intentando: $fallback_url"
+        if wget -q --show-progress "$fallback_url" -O /usr/local/bin/checkuser 2>/dev/null; then
             chmod +x /usr/local/bin/checkuser
-            echo -e "${OK} CheckUser ${latest_version} instalado exitosamente"
-            return 0
+            if /usr/local/bin/checkuser -version &>/dev/null; then
+                echo -e "${OK} CheckUser instalado correctamente"
+                return 0
+            fi
         fi
     done
     
-    # Último intento: buscar en el release más reciente de DTunnel0
-    echo -e "${WARN} Intentando descarga desde repositorio alternativo..."
-    local fallback_url="https://github.com/DTunnel0/CheckUser-Go/releases/latest/download/checkuser-linux-$arch"
-    
-    if wget -q --show-progress "$fallback_url" -O /usr/local/bin/checkuser 2>/dev/null; then
-        chmod +x /usr/local/bin/checkuser
-        echo -e "${OK} CheckUser instalado desde repositorio alternativo"
-        return 0
-    fi
-    
-    echo -e "${ERR} No se pudo descargar CheckUser"
+    echo -e "${ERR} No se pudo descargar CheckUser funcional"
+    echo -e "${INFO} URLs intentadas:"
+    echo "$assets_json"
     return 1
 }
 
