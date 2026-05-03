@@ -309,7 +309,7 @@ configure_firewall() {
     echo -e "${INFO} Configurando firewall..."
     
     # Verificar si iptables está disponible
-    if command -v iptables &>/dev/null; then
+    
         sudo iptables -I INPUT -p tcp --dport 2053 -j ACCEPT
         sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
         sudo iptables-save > /etc/iptables.rules
