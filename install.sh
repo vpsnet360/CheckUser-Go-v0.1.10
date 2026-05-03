@@ -308,18 +308,14 @@ generate_ssl_certificate() {
 configure_firewall() {
     echo -e "${INFO} Configurando firewall..."
     
-    if command -v ufw &>/dev/null; then
-        sudo ufw allow 2053/tcp &>/dev/null
-        sudo ufw allow 80/tcp &>/dev/null
-        sudo ufw reload &>/dev/null
-        echo -e "${OK} Puertos 2053 y 80 abiertos en UFW"
-    elif command -v firewall-cmd &>/dev/null; then
-        sudo firewall-cmd --permanent --add-port=2053/tcp &>/dev/null
-        sudo firewall-cmd --permanent --add-port=80/tcp &>/dev/null
-        sudo firewall-cmd --reload &>/dev/null
-        echo -e "${OK} Puertos 2053 y 80 abiertos en firewalld"
+    # Verificar si iptables está disponible
+    if command -v iptables &>/dev/null; then
+        sudo iptables -I INPUT -p tcp --dport 2053 -j ACCEPT
+        sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+        sudo iptables-save > /etc/iptables.rules
+        echo -e "${OK} Puertos 2053 y 80 abiertos en iptables"
     else
-        echo -e "${WARN} No se detectó firewall. Abre puertos 2053 y 80 manualmente"
+        echo -e "${WARN} iptables no está disponible. Abre puertos 2053 y 80 manualmente"
     fi
 }
 
