@@ -308,11 +308,10 @@ generate_ssl_certificate() {
 configure_firewall() {
     echo -e "${INFO} Configurando firewall..."
     
-    # Verificar si iptables está disponible
-    
         sudo iptables -I INPUT -p tcp --dport 2053 -j ACCEPT
         sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
         sudo iptables-save > /etc/iptables.rules
+        
         echo -e "${OK} Puertos 2053 y 80 abiertos en iptables"
     else
         echo -e "${WARN} iptables no está disponible. Abre puertos 2053 y 80 manualmente"
