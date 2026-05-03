@@ -313,7 +313,7 @@ configure_firewall() {
         sudo iptables-save > /etc/iptables.rules
         
         echo -e "${OK} Puertos 2053 y 80 abiertos en iptables"
-    else
+        
         echo -e "${WARN} iptables no está disponible. Abre puertos 2053 y 80 manualmente"
     fi
 }
