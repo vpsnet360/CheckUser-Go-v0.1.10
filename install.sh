@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 #   CHECKUSER SSL INSTALLER - Nginx + Let's Encrypt
-#   Script completo con instalación automática
+#   Busca siempre la última versión automáticamente
 # ============================================================
 
 RED='\033[0;31m'
@@ -23,17 +23,42 @@ get_arch() {
     esac
 }
 
+get_latest_version() {
+    local repo=$1
+    local latest_release
+    
+    echo -e "${INFO} Buscando última versión de CheckUser..."
+    
+    # Intentar obtener la última versión de GitHub
+    latest_release=$(curl -s "https://api.github.com/repos/$repo/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    
+    if [[ -z "$latest_release" ]]; then
+        echo -e "${WARN} No se pudo obtener versión de GitHub. Intentando método alternativo..."
+        
+        # Método alternativo: listar releases y tomar la primera
+        latest_release=$(curl -s "https://api.github.com/repos/$repo/releases?per_page=1" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    fi
+    
+    if [[ -z "$latest_release" ]]; then
+        echo -e "${ERR} No se pudo determinar la última versión"
+        return 1
+    fi
+    
+    echo -e "${OK} Última versión encontrada: ${CYAN}${latest_release}${NC}"
+    echo "$latest_release"
+}
+
 install_dependencies() {
     echo -e "${INFO} Instalando dependencias (nginx, certbot, curl)..."
     
     if command -v apt &>/dev/null; then
         sudo apt update -y &>/dev/null
-        sudo apt install -y nginx certbot python3-certbot-nginx curl wget &>/dev/null
+        sudo apt install -y nginx certbot python3-certbot-nginx curl wget dnsutils &>/dev/null
     elif command -v yum &>/dev/null; then
         sudo yum install -y epel-release &>/dev/null
-        sudo yum install -y nginx certbot python3-certbot-nginx curl wget &>/dev/null
+        sudo yum install -y nginx certbot python3-certbot-nginx curl wget bind-utils &>/dev/null
     elif command -v dnf &>/dev/null; then
-        sudo dnf install -y nginx certbot python3-certbot-nginx curl wget &>/dev/null
+        sudo dnf install -y nginx certbot python3-certbot-nginx curl wget bind-utils &>/dev/null
     else
         echo -e "${ERR} No se pudo instalar dependencias"
         return 1
@@ -45,41 +70,92 @@ install_dependencies() {
 
 install_checkuser_binary() {
     if [[ -x /usr/local/bin/checkuser ]]; then
-        echo -e "${OK} CheckUser ya instalado"
-        return 0
+        local current_version
+        current_version=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
+        echo -e "${OK} CheckUser ya instalado (versión: ${CYAN}${current_version}${NC})"
+        
+        # Preguntar si quiere actualizar
+        echo -ne "${WARN} ¿Buscar actualización? [s/N]: "
+        read update_confirm
+        [[ "$update_confirm" != "s" && "$update_confirm" != "S" ]] && return 0
     fi
 
-    echo -e "${INFO} Descargando CheckUser..."
-
-    local repo="vpsnet360/CheckUser-Go-v0.1.10"
-    local latest_release
-    latest_release=$(curl -s https://api.github.com/repos/$repo/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-    [[ -z "$latest_release" ]] && latest_release="v0.1.10"
+    # Repositorios a probar (en orden de prioridad)
+    local repos=(
+        "DTunnel0/CheckUser-Go"
+        "vpsnet360/CheckUser-Go-v0.1.10"
+    )
+    
+    local latest_version=""
+    local selected_repo=""
+    
+    # Intentar obtener última versión de diferentes repos
+    for repo in "${repos[@]}"; do
+        echo -e "${INFO} Buscando en repositorio: ${CYAN}${repo}${NC}"
+        latest_version=$(get_latest_version "$repo")
+        
+        if [[ -n "$latest_version" ]]; then
+            selected_repo="$repo"
+            break
+        fi
+    done
+    
+    if [[ -z "$latest_version" ]]; then
+        echo -e "${ERR} No se pudo encontrar CheckUser en ningún repositorio"
+        return 1
+    fi
 
     local arch
     arch=$(get_arch)
     if [ "$arch" = "unsupported" ]; then
-        echo -e "${ERR} Arquitectura no soportada"
+        echo -e "${ERR} Arquitectura no soportada: $(uname -m)"
         return 1
     fi
 
+    echo -e "${INFO} Versión: ${CYAN}${latest_version}${NC} | Arquitectura: ${CYAN}${arch}${NC}"
+    
     local name="checkuser-linux-$arch"
-    local download_url="https://github.com/$repo/releases/download/$latest_release/$name"
-
-    wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
-
-    if [[ $? -ne 0 ]]; then
-        download_url="https://github.com/$repo/releases/download/v0.1.10/$name"
-        wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser
-        if [[ $? -ne 0 ]]; then
-            echo -e "${ERR} No se pudo descargar CheckUser"
-            return 1
-        fi
+    local download_url="https://github.com/$selected_repo/releases/download/$latest_version/$name"
+    
+    echo -e "${INFO} Descargando CheckUser..."
+    
+    # Intentar descargar
+    if wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser 2>/dev/null; then
+        chmod +x /usr/local/bin/checkuser
+        echo -e "${OK} CheckUser ${latest_version} instalado exitosamente"
+        return 0
     fi
-
-    chmod +x /usr/local/bin/checkuser
-    echo -e "${OK} CheckUser instalado"
-    return 0
+    
+    # Si falla, intentar nombres alternativos
+    local alt_names=(
+        "checkuser-linux-$arch"
+        "checkuser-$arch"
+        "checkuser"
+    )
+    
+    for alt_name in "${alt_names[@]}"; do
+        local alt_url="https://github.com/$selected_repo/releases/download/$latest_version/$alt_name"
+        echo -e "${WARN} Intentando nombre alternativo: ${alt_name}"
+        
+        if wget -q --show-progress "$alt_url" -O /usr/local/bin/checkuser 2>/dev/null; then
+            chmod +x /usr/local/bin/checkuser
+            echo -e "${OK} CheckUser ${latest_version} instalado exitosamente"
+            return 0
+        fi
+    done
+    
+    # Último intento: buscar en el release más reciente de DTunnel0
+    echo -e "${WARN} Intentando descarga desde repositorio alternativo..."
+    local fallback_url="https://github.com/DTunnel0/CheckUser-Go/releases/latest/download/checkuser-linux-$arch"
+    
+    if wget -q --show-progress "$fallback_url" -O /usr/local/bin/checkuser 2>/dev/null; then
+        chmod +x /usr/local/bin/checkuser
+        echo -e "${OK} CheckUser instalado desde repositorio alternativo"
+        return 0
+    fi
+    
+    echo -e "${ERR} No se pudo descargar CheckUser"
+    return 1
 }
 
 configure_checkuser_service() {
@@ -89,7 +165,7 @@ configure_checkuser_service() {
 
     cat << EOF | sudo tee /etc/systemd/system/checkuser.service > /dev/null
 [Unit]
-Description=CheckUser Service v0.1.10
+Description=CheckUser Service
 After=network.target nss-lookup.target
 
 [Service]
@@ -260,13 +336,10 @@ systemctl stop apache2 2>/dev/null
 # Renovar certificado
 certbot renew --quiet
 
-# Copiar certificados actualizados
-cp /etc/letsencrypt/live/${domain}/fullchain.pem /etc/checkuser/ssl/fullchain.pem
-cp /etc/letsencrypt/live/${domain}/privkey.pem /etc/checkuser/ssl/privkey.pem
-
-# Reiniciar servicios
+# Reiniciar nginx
 systemctl start nginx
-systemctl restart checkuser
+
+echo "Certificado SSL renovado: \$(date)" >> /var/log/checkuser-ssl.log
 EOF
     
     sudo chmod +x /etc/checkuser/renew-ssl.sh
@@ -281,8 +354,9 @@ install_checkuser() {
     clear
     echo -e "${CYAN}"
     echo "  ╔══════════════════════════════════════════╗"
-    echo "  ║     CHECKUSER SSL INSTALLER v1.0         ║"
+    echo "  ║     CHECKUSER SSL INSTALLER v2.0         ║"
     echo "  ║     Proxy nginx + Let's Encrypt          ║"
+    echo "  ║     Auto-detección última versión        ║"
     echo "  ╚══════════════════════════════════════════╝"
     echo -e "${NC}"
 
@@ -332,7 +406,7 @@ install_checkuser() {
     # 2. Generar certificado SSL
     generate_ssl_certificate "$DOMAIN" "$EMAIL" || return 1
 
-    # 3. Instalar CheckUser
+    # 3. Instalar CheckUser (siempre busca última versión)
     install_checkuser_binary || return 1
 
     # 4. Configurar servicio CheckUser (HTTP interno)
@@ -356,11 +430,14 @@ install_checkuser() {
 
     echo ""
     if echo "$ISSUER" | grep -qi "Let's Encrypt\|R10\|R11\|R12"; then
+        CHECKUSER_VERSION=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
+        
         echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
         echo -e "${GREEN}║          INSTALACIÓN COMPLETADA ✓            ║${NC}"
         echo -e "${GREEN}╠══════════════════════════════════════════════╣${NC}"
         echo -e "${GREEN}║${NC}  URL: ${CYAN}https://${DOMAIN}:2053${NC}"
         echo -e "${GREEN}║${NC}  SSL: ${GREEN}Let's Encrypt ✓${NC}"
+        echo -e "${GREEN}║${NC}  Versión: ${CYAN}${CHECKUSER_VERSION}${NC}"
         echo -e "${GREEN}║${NC}  Puerto externo: ${CYAN}2053${NC} (nginx SSL)"
         echo -e "${GREEN}║${NC}  Puerto interno: ${CYAN}2054${NC} (checkuser HTTP)"
         echo -e "${GREEN}║${NC}  Renovación: ${GREEN}Automática${NC}"
@@ -381,11 +458,9 @@ reinstall_checkuser() {
     sudo systemctl stop checkuser &>/dev/null
     sudo systemctl stop nginx &>/dev/null
     
-    # Eliminar archivos
+    # Eliminar binario
     sudo rm -f /usr/local/bin/checkuser
     sudo rm -f /etc/systemd/system/checkuser.service
-    sudo rm -f /etc/nginx/sites-enabled/checkuser.conf
-    sudo rm -rf /etc/checkuser
     
     sudo systemctl daemon-reload
     
@@ -410,7 +485,7 @@ uninstall_checkuser() {
     read -rp "    ¿Eliminar certificados SSL? [s/N]: " DEL_SSL
     if [[ "$DEL_SSL" == "s" || "$DEL_SSL" == "S" ]]; then
         echo -e "${INFO} Dominios disponibles:"
-        sudo ls /etc/letsencrypt/live/
+        sudo ls /etc/letsencrypt/live/ 2>/dev/null
         read -rp "    Dominio a eliminar: " CERT_DOMAIN
         [[ -n "$CERT_DOMAIN" ]] && sudo certbot delete --cert-name "$CERT_DOMAIN" &>/dev/null
     fi
@@ -427,7 +502,7 @@ main() {
         clear
         echo -e "${CYAN}"
         echo '════════════════════════════════════'
-        echo -ne "     CHECKUSER SSL INSTALLER"
+        echo -ne "     CHECKUSER SSL INSTALLER v2.0"
         if systemctl is-active --quiet checkuser 2>/dev/null; then
             echo -e " ${GREEN}[ACTIVO]${NC}"
         else
