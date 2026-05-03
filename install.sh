@@ -27,32 +27,32 @@ get_latest_version() {
     local repo=$1
     local latest_release
     
-    echo -e "${INFO} Buscando última versión de CheckUser..."
+    echo -e "${INFO} Buscando última versión de CheckUser en $repo..." >&2
     
-    # CORRECCIÓN: Usar el endpoint correcto y validar respuesta
     local response
     response=$(curl -s "https://api.github.com/repos/$repo/releases/latest")
     
-    # Verificar si la respuesta es válida
     if echo "$response" | grep -q "Not Found"; then
-        echo -e "${WARN} Repositorio $repo no encontrado"
+        echo -e "${WARN} Repositorio $repo no encontrado" >&2
         return 1
     fi
     
     if echo "$response" | grep -q "rate limit exceeded"; then
-        echo -e "${ERR} Rate limit de GitHub excedido"
+        echo -e "${ERR} Rate limit de GitHub excedido" >&2
         return 1
     fi
     
-    latest_release=$(echo "$response" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    # Extraer SOLO el tag
+    latest_release=$(echo "$response" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)
     
     if [[ -z "$latest_release" ]]; then
-        echo -e "${WARN} No se pudo obtener versión de $repo"
+        echo -e "${WARN} No se pudo obtener versión de $repo" >&2
         return 1
     fi
     
-    echo -e "${OK} Última versión encontrada: ${CYAN}${latest_release}${NC}"
-    echo "$latest_release"
+    echo -e "${OK} Última versión encontrada: ${CYAN}${latest_release}${NC}" >&2
+    # Solo devolver el valor limpio
+    printf "%s" "$latest_release"
 }
 
 install_dependencies() {
@@ -152,36 +152,90 @@ https://github.com/$selected_repo/releases/download/$latest_version/checkuser"
                 echo -e "${WARN} Binario descargado pero no funciona, probando siguiente..."
                 rm -f /usr/local/bin/checkuser
             fi
-        fi
-    done <<< "$assets_json"
-    
-    if [[ "$download_success" = true ]]; then
-        return 0
+install_checkuser_binary() {
+    if [[ -x /usr/local/bin/checkuser ]]; then
+        local current_version
+        current_version=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
+        echo -e "${OK} CheckUser ya instalado (versión: ${CYAN}${current_version}${NC})"
+        
+        echo -ne "${WARN} ¿Buscar actualización? [s/N]: "
+        read update_confirm
+        [[ "$update_confirm" != "s" && "$update_confirm" != "S" ]] && return 0
     fi
-    
-    # Fallback manual con URLs comunes
-    echo -e "${WARN} Intentando URLs alternativas..."
-    local fallback_urls=(
-        "https://github.com/$selected_repo/releases/download/$latest_version/checkuser-linux-$arch"
-        "https://github.com/$selected_repo/releases/download/$latest_version/checkuser-$arch"
-        "https://github.com/$selected_repo/releases/download/$latest_version/checkuser"
-        "https://github.com/DTunnel0/CheckUser-Go/releases/latest/download/checkuser-linux-$arch"
+
+    local repos=(
+        "DTunnel0/CheckUser-Go"
     )
     
-    for fallback_url in "${fallback_urls[@]}"; do
-        echo -e "${INFO} Intentando: $fallback_url"
-        if wget -q --show-progress "$fallback_url" -O /usr/local/bin/checkuser 2>/dev/null; then
-            chmod +x /usr/local/bin/checkuser
-            if /usr/local/bin/checkuser -version &>/dev/null; then
-                echo -e "${OK} CheckUser instalado correctamente"
-                return 0
-            fi
+    local latest_version=""
+    local selected_repo=""
+    
+    for repo in "${repos[@]}"; do
+        echo -e "${INFO} Buscando en repositorio: ${CYAN}${repo}${NC}"
+        latest_version=$(get_latest_version "$repo")
+        
+        if [[ -n "$latest_version" && "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            selected_repo="$repo"
+            break
         fi
     done
     
-    echo -e "${ERR} No se pudo descargar CheckUser funcional"
-    echo -e "${INFO} URLs intentadas:"
-    echo "$assets_json"
+    if [[ -z "$latest_version" ]]; then
+        echo -e "${ERR} No se pudo encontrar CheckUser válido"
+        return 1
+    fi
+
+    local arch
+    arch=$(get_arch)
+    if [ "$arch" = "unsupported" ]; then
+        echo -e "${ERR} Arquitectura no soportada: $(uname -m)"
+        return 1
+    fi
+
+    echo -e "${INFO} Versión: ${CYAN}${latest_version}${NC} | Arquitectura: ${CYAN}${arch}${NC}"
+    
+    # URL directa sin consultar assets
+    local download_url="https://github.com/$selected_repo/releases/download/$latest_version/checkuser-linux-$arch"
+    
+    echo -e "${INFO} Descargando: ${CYAN}checkuser-linux-$arch${NC}"
+    
+    if wget -q --show-progress "$download_url" -O /tmp/checkuser 2>/dev/null; then
+        chmod +x /tmp/checkuser
+        
+        # Verificar que funciona ANTES de moverlo
+        if /tmp/checkuser -version &>/dev/null 2>&1; then
+            sudo mv /tmp/checkuser /usr/local/bin/checkuser
+            echo -e "${OK} CheckUser ${latest_version} instalado exitosamente"
+            return 0
+        else
+            rm -f /tmp/checkuser
+            echo -e "${WARN} Binario descargado pero no ejecutable"
+        fi
+    fi
+    
+    # Probar nombres alternativos
+    local alt_names=(
+        "checkuser-$arch"
+        "checkuser"
+        "checkuser-linux"
+    )
+    
+    for alt_name in "${alt_names[@]}"; do
+        local alt_url="https://github.com/$selected_repo/releases/download/$latest_version/$alt_name"
+        echo -e "${INFO} Probando: ${CYAN}$alt_name${NC}"
+        
+        if wget -q "$alt_url" -O /tmp/checkuser 2>/dev/null; then
+            chmod +x /tmp/checkuser
+            if /tmp/checkuser -version &>/dev/null 2>&1; then
+                sudo mv /tmp/checkuser /usr/local/bin/checkuser
+                echo -e "${OK} CheckUser instalado con nombre: $alt_name"
+                return 0
+            fi
+            rm -f /tmp/checkuser
+        fi
+    done
+    
+    echo -e "${ERR} No se encontró binario funcional en $selected_repo"
     return 1
 }
 
