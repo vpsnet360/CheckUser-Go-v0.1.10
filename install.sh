@@ -88,101 +88,6 @@ install_checkuser_binary() {
 
     local repos=(
         "DTunnel0/CheckUser-Go"
-        "vpsnet360/CheckUser-Go-v0.1.10"
-    )
-    
-    local latest_version=""
-    local selected_repo=""
-    
-    for repo in "${repos[@]}"; do
-        echo -e "${INFO} Buscando en repositorio: ${CYAN}${repo}${NC}"
-        latest_version=$(get_latest_version "$repo")
-        
-        if [[ -n "$latest_version" ]]; then
-            selected_repo="$repo"
-            break
-        fi
-    done
-    
-    if [[ -z "$latest_version" ]]; then
-        echo -e "${ERR} No se pudo encontrar CheckUser en ningún repositorio"
-        return 1
-    fi
-
-    local arch
-    arch=$(get_arch)
-    if [ "$arch" = "unsupported" ]; then
-        echo -e "${ERR} Arquitectura no soportada: $(uname -m)"
-        return 1
-    fi
-
-    echo -e "${INFO} Versión: ${CYAN}${latest_version}${NC} | Arquitectura: ${CYAN}${arch}${NC}"
-    
-    # CORRECCIÓN: Obtener la lista de assets disponibles para este release
-    echo -e "${INFO} Obteniendo lista de archivos disponibles..."
-    local assets_url="https://api.github.com/repos/$selected_repo/releases/tags/$latest_version"
-    local assets_json
-    assets_json=$(curl -s "$assets_url" | grep -oP '"browser_download_url": "\K[^"]+' || echo "")
-    
-    if [[ -z "$assets_json" ]]; then
-        echo -e "${WARN} No se pudo obtener lista de assets, probando nombres comunes..."
-        assets_json="https://github.com/$selected_repo/releases/download/$latest_version/checkuser-linux-$arch
-https://github.com/$selected_repo/releases/download/$latest_version/checkuser-$arch
-https://github.com/$selected_repo/releases/download/$latest_version/checkuser"
-    fi
-    
-    # Intentar descargar con cada URL disponible
-    local download_success=false
-    
-    while IFS= read -r download_url; do
-        [[ -z "$download_url" ]] && continue
-        
-        local filename=$(basename "$download_url")
-        echo -e "${INFO} Probando: ${CYAN}$filename${NC}"
-        
-        if wget -q --show-progress "$download_url" -O /usr/local/bin/checkuser 2>/dev/null; then
-            chmod +x /usr/local/bin/checkuser
-            
-            # Verificar que el binario funciona
-            if /usr/local/bin/checkuser -version &>/dev/null; then
-                echo -e "${OK} CheckUser ${latest_version} instalado y funcionando"
-                download_success=true
-                break
-            else
-                echo -e "${WARN} Binario descargado pero no funciona, probando siguiente..."
-                rm -f /usr/local/bin/checkuser
-            fi
-install_checkuser_binary() {
-    if [[ -x /usr/local/bin/checkuser ]]; then
-        local current_version
-        current_version=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
-        echo -e "${OK} CheckUser ya instalado (versión: ${CYAN}${current_version}${NC})"
-        
-        echo -ne "${WARN} ¿Buscar actualización? [s/N]: "
-        read update_confirm
-        [[ "$update_confirm" != "s" && "$update_confirm" != "S" ]] && return 0
-    fi
-
-    local repos=(
-        "DTunnel0/CheckUser-Go"
-    )
-    
-    local latest_version=""
-    local selected_repo=""
-    
-install_checkuser_binary() {
-    if [[ -x /usr/local/bin/checkuser ]]; then
-        local current_version
-        current_version=$(/usr/local/bin/checkuser -version 2>&1 | grep -oP 'v[\d.]+' || echo "desconocida")
-        echo -e "${OK} CheckUser ya instalado (versión: ${CYAN}${current_version}${NC})"
-        
-        echo -ne "${WARN} ¿Buscar actualización? [s/N]: "
-        read update_confirm
-        [[ "$update_confirm" != "s" && "$update_confirm" != "S" ]] && return 0
-    fi
-
-    local repos=(
-        "DTunnel0/CheckUser-Go"
     )
     
     local latest_version=""
@@ -254,7 +159,8 @@ install_checkuser_binary() {
     done
     
     echo -e "${ERR} No se encontró binario funcional en $selected_repo"
-    return bin
+    return 1
+}
 
 configure_checkuser_service() {
     echo -e "${INFO} Configurando servicio CheckUser (HTTP:2054)..."
